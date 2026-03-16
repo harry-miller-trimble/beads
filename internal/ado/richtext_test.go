@@ -241,6 +241,108 @@ func TestMarkdownToHTML(t *testing.T) {
 	}
 }
 
+func TestHTMLToMarkdown_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantEmpty bool
+		contains  string
+	}{
+		{"whitespace only", "   \t\n  ", true, ""},
+		{"only script tag (sanitized to empty)", "<script>alert('xss')</script>", true, ""},
+		{"only style tag", "<style>body{color:red}</style>", true, ""},
+		{"unclosed tags", "<p>hello <b>world", false, "hello"},
+		{"nested divs", "<div><div><p>deep</p></div></div>", false, "deep"},
+		{"br tags", "line1<br/>line2", false, "line1"},
+		{"HTML entities", "&amp; &lt; &gt;", false, "&"},
+		{"table HTML", "<table><tr><td>cell</td></tr></table>", false, "cell"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := HTMLToMarkdown(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantEmpty {
+				if strings.TrimSpace(result) != "" {
+					t.Errorf("expected empty result, got %q", result)
+				}
+				return
+			}
+			if tt.contains != "" && !strings.Contains(result, tt.contains) {
+				t.Errorf("expected result to contain %q, got %q", tt.contains, result)
+			}
+		})
+	}
+}
+
+func TestMarkdownToHTML_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		contains []string
+	}{
+		{
+			name:     "whitespace only",
+			input:    "   \t\n  ",
+			contains: nil,
+		},
+		{
+			name:     "code block with language",
+			input:    "```go\nfmt.Println(\"hello\")\n```",
+			contains: []string{"<pre>", "<code", "fmt.Println"},
+		},
+		{
+			name:     "table-like markdown preserved",
+			input:    "| A | B |\n|---|---|\n| 1 | 2 |",
+			contains: []string{"A", "B", "1", "2"},
+		},
+		{
+			name:     "inline code",
+			input:    "Use `fmt.Println` to print",
+			contains: []string{"<code>fmt.Println</code>"},
+		},
+		{
+			name:     "multiple headers",
+			input:    "# H1\n## H2\n### H3",
+			contains: []string{"<h1>", "<h2>", "<h3>"},
+		},
+		{
+			name:     "blockquote",
+			input:    "> quoted text",
+			contains: []string{"<blockquote>"},
+		},
+		{
+			name:     "horizontal rule",
+			input:    "above\n\n---\n\nbelow",
+			contains: []string{"<hr"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := MarkdownToHTML(tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tc.name == "whitespace only" {
+				if result != "" {
+					t.Errorf("expected empty string, got %q", result)
+				}
+				return
+			}
+
+			for _, substr := range tc.contains {
+				if !strings.Contains(result, substr) {
+					t.Errorf("expected result to contain %q, got %q", substr, result)
+				}
+			}
+		})
+	}
+}
+
 func TestHTMLToMarkdown_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name      string

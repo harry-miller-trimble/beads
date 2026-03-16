@@ -89,6 +89,169 @@ func TestStatusToBeads_Defaults(t *testing.T) {
 	}
 }
 
+func TestStatusToBeads_NonStringInput(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	tests := []struct {
+		name  string
+		input interface{}
+		want  types.Status
+	}{
+		{"nil → open", nil, types.StatusOpen},
+		{"int → open", 42, types.StatusOpen},
+		{"float → open", 3.14, types.StatusOpen},
+		{"bool → open", true, types.StatusOpen},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.StatusToBeads(tt.input)
+			if got != tt.want {
+				t.Errorf("StatusToBeads(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStatusToTracker_DefaultCase(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	got := m.StatusToTracker(types.Status("unknown_status"))
+	if got != "New" {
+		t.Errorf("StatusToTracker(unknown_status) = %v, want %q", got, "New")
+	}
+}
+
+func TestStatusToTracker_CustomMapOverridesDefault(t *testing.T) {
+	m := NewFieldMapper(
+		map[string]string{
+			"open":        "To Do",
+			"in_progress": "Doing",
+			"closed":      "Finished",
+			"blocked":     "On Hold",
+			"deferred":    "Parked",
+		},
+		nil,
+	)
+
+	tests := []struct {
+		name  string
+		input types.Status
+		want  string
+	}{
+		{"custom open → To Do", types.StatusOpen, "To Do"},
+		{"custom in_progress → Doing", types.StatusInProgress, "Doing"},
+		{"custom closed → Finished", types.StatusClosed, "Finished"},
+		{"custom blocked → On Hold", types.StatusBlocked, "On Hold"},
+		{"custom deferred → Parked", types.StatusDeferred, "Parked"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.StatusToTracker(tt.input)
+			if got != tt.want {
+				t.Errorf("StatusToTracker(%q) = %v, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypeToBeads_NonStringInput(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	tests := []struct {
+		name  string
+		input interface{}
+		want  types.IssueType
+	}{
+		{"nil → task", nil, types.TypeTask},
+		{"int → task", 42, types.TypeTask},
+		{"bool → task", true, types.TypeTask},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.TypeToBeads(tt.input)
+			if got != tt.want {
+				t.Errorf("TypeToBeads(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypeToBeads_UnknownWithDefault(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	got := m.TypeToBeads("CustomWorkItemType")
+	if got != types.TypeTask {
+		t.Errorf("TypeToBeads(CustomWorkItemType) = %q, want %q", got, types.TypeTask)
+	}
+}
+
+func TestTypeToBeads_CustomMap(t *testing.T) {
+	m := NewFieldMapper(nil, map[string]string{"feature": "Product Backlog Item", "bug": "Defect"})
+
+	tests := []struct {
+		name  string
+		input string
+		want  types.IssueType
+	}{
+		{"custom PBI → feature", "Product Backlog Item", types.TypeFeature},
+		{"custom Defect → bug", "Defect", types.TypeBug},
+		{"custom case-insensitive", "product backlog item", types.TypeFeature},
+		{"fallthrough Task → task", "Task", types.TypeTask},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.TypeToBeads(tt.input)
+			if got != tt.want {
+				t.Errorf("TypeToBeads(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypeToTracker_DefaultCase(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	got := m.TypeToTracker(types.IssueType("unknown_type"))
+	if got != "Task" {
+		t.Errorf("TypeToTracker(unknown_type) = %v, want %q", got, "Task")
+	}
+}
+
+func TestTypeToTracker_CustomMapAllTypes(t *testing.T) {
+	m := NewFieldMapper(nil, map[string]string{
+		"bug":     "Defect",
+		"feature": "Product Backlog Item",
+		"task":    "Work Item",
+		"epic":    "Initiative",
+		"chore":   "Maintenance",
+	})
+
+	tests := []struct {
+		name  string
+		input types.IssueType
+		want  string
+	}{
+		{"custom bug → Defect", types.TypeBug, "Defect"},
+		{"custom feature → PBI", types.TypeFeature, "Product Backlog Item"},
+		{"custom task → Work Item", types.TypeTask, "Work Item"},
+		{"custom epic → Initiative", types.TypeEpic, "Initiative"},
+		{"custom chore → Maintenance", types.TypeChore, "Maintenance"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.TypeToTracker(tt.input)
+			if got != tt.want {
+				t.Errorf("TypeToTracker(%q) = %v, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusToBeads_CustomMap(t *testing.T) {
 	m := NewFieldMapper(
 		map[string]string{"in_progress": "Doing", "closed": "Finished"},
@@ -475,6 +638,117 @@ func TestFilterBeadsTags(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("filterBeadsTags[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestExtractAssignedTo(t *testing.T) {
+	tests := []struct {
+		name  string
+		input interface{}
+		want  string
+	}{
+		{"nil → empty", nil, ""},
+		{"string value", "alice@example.com", "alice@example.com"},
+		{"map with displayName", map[string]interface{}{"displayName": "Alice Smith", "uniqueName": "alice@example.com"}, "Alice Smith"},
+		{"map with only uniqueName", map[string]interface{}{"uniqueName": "alice@example.com"}, ""},
+		{"map with no names", map[string]interface{}{"id": "123"}, ""},
+		{"empty map", map[string]interface{}{}, ""},
+		{"non-string displayName", map[string]interface{}{"displayName": 42}, ""},
+		{"non-map non-string type", 42, ""},
+		{"boolean type", true, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractAssignedTo(tt.input)
+			if got != tt.want {
+				t.Errorf("extractAssignedTo(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRestoreMetadata(t *testing.T) {
+	tests := []struct {
+		name       string
+		metadata   json.RawMessage
+		wantFields map[string]interface{}
+	}{
+		{
+			name:       "nil metadata",
+			metadata:   nil,
+			wantFields: map[string]interface{}{},
+		},
+		{
+			name:       "empty metadata",
+			metadata:   json.RawMessage([]byte{}),
+			wantFields: map[string]interface{}{},
+		},
+		{
+			name:       "invalid JSON metadata",
+			metadata:   json.RawMessage([]byte(`not json`)),
+			wantFields: map[string]interface{}{},
+		},
+		{
+			name:     "only area_path",
+			metadata: json.RawMessage(`{"ado.area_path":"Project\\Team"}`),
+			wantFields: map[string]interface{}{
+				FieldAreaPath: "Project\\Team",
+			},
+		},
+		{
+			name:     "only iteration_path",
+			metadata: json.RawMessage(`{"ado.iteration_path":"Sprint 1"}`),
+			wantFields: map[string]interface{}{
+				FieldIterationPath: "Sprint 1",
+			},
+		},
+		{
+			name:     "only story_points",
+			metadata: json.RawMessage(`{"ado.story_points":5}`),
+			wantFields: map[string]interface{}{
+				FieldStoryPoints: float64(5),
+			},
+		},
+		{
+			name:     "all metadata fields",
+			metadata: json.RawMessage(`{"ado.area_path":"A","ado.iteration_path":"B","ado.story_points":8}`),
+			wantFields: map[string]interface{}{
+				FieldAreaPath:      "A",
+				FieldIterationPath: "B",
+				FieldStoryPoints:   float64(8),
+			},
+		},
+		{
+			name:       "unrelated metadata keys ignored",
+			metadata:   json.RawMessage(`{"ado.rev":3,"custom_field":"value"}`),
+			wantFields: map[string]interface{}{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issue := &types.Issue{Metadata: tt.metadata}
+			fields := map[string]interface{}{}
+			restoreMetadata(issue, fields)
+
+			for k, want := range tt.wantFields {
+				got, ok := fields[k]
+				if !ok {
+					t.Errorf("expected field %q to be set", k)
+					continue
+				}
+				if got != want {
+					t.Errorf("fields[%q] = %v, want %v", k, got, want)
+				}
+			}
+			// Ensure no extra fields were set.
+			for k := range fields {
+				if _, ok := tt.wantFields[k]; !ok {
+					t.Errorf("unexpected field %q = %v", k, fields[k])
+				}
+			}
+		})
 	}
 }
 

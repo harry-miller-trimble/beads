@@ -908,3 +908,508 @@ func TestClient_RemoveWorkItemLink(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestClient_RemoveWorkItemLink_Error(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"relation index out of range"}`))
+	})
+
+	err := client.RemoveWorkItemLink(context.Background(), 10, 99)
+	if err == nil {
+		t.Fatal("expected error for bad request")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error should mention 400: %v", err)
+	}
+	if !strings.Contains(err.Error(), "relation index out of range") {
+		t.Errorf("error should include response body: %v", err)
+	}
+}
+
+func TestClient_doRequest_RetryOn503(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"service unavailable"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+
+	body, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) < 3 {
+		t.Errorf("expected at least 3 attempts for 503 retry, got %d", atomic.LoadInt32(&attempts))
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
+
+func TestClient_doRequest_NoRetryOn400(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"bad request"}`))
+	})
+
+	_, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error for 400")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error should mention 400: %v", err)
+	}
+	if !strings.Contains(err.Error(), "bad request") {
+		t.Errorf("error should include response body: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected exactly 1 attempt for 400, got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestClient_doRequest_NoRetryOn404(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
+	})
+
+	_, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should mention 404: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected exactly 1 attempt for 404, got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestClient_doRequest_NoRetryOn403(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"forbidden"}`))
+	})
+
+	_, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error for 403")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error should mention 403: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected exactly 1 attempt for 403, got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestClient_doRequest_ContextCancellation(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"message":"unavailable"}`))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	_, err := client.doRequest(ctx, http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestClient_doRequest_PostBody(t *testing.T) {
+	var gotBody string
+	var gotContentType string
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	payload := map[string]string{"key": "value"}
+	_, err := client.doRequest(context.Background(), http.MethodPost, client.apiBase()+"/test", "application/json", payload)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("content-type = %q, want application/json", gotContentType)
+	}
+	if !strings.Contains(gotBody, `"key":"value"`) {
+		t.Errorf("unexpected body: %s", gotBody)
+	}
+}
+
+func TestClient_orgBase(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		org     string
+		want    string
+	}{
+		{
+			name:    "cloud default",
+			baseURL: "",
+			org:     "myorg",
+			want:    "https://dev.azure.com/myorg/_apis",
+		},
+		{
+			name:    "custom base URL (on-prem)",
+			baseURL: "https://tfs.example.com/collection",
+			org:     "ignored",
+			want:    "https://tfs.example.com/collection/_apis",
+		},
+		{
+			name:    "trailing slash stripped",
+			baseURL: "https://tfs.example.com/collection/",
+			org:     "ignored",
+			want:    "https://tfs.example.com/collection/_apis",
+		},
+		{
+			name:    "legacy visualstudio.com URL",
+			baseURL: "https://myorg.visualstudio.com",
+			org:     "myorg",
+			want:    "https://myorg.visualstudio.com/_apis",
+		},
+		{
+			name:    "special characters in org",
+			baseURL: "",
+			org:     "my org",
+			want:    "https://dev.azure.com/my%20org/_apis",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewClient(NewSecretString("pat"), tt.org, "proj")
+			if tt.baseURL != "" {
+				c = c.WithBaseURL(tt.baseURL)
+			}
+			got := c.orgBase()
+			if got != tt.want {
+				t.Errorf("orgBase() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_CreateWorkItem_Error400(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"Field 'System.Title' is required"}`))
+	})
+
+	fields := map[string]interface{}{
+		FieldState: "New",
+	}
+	_, err := client.CreateWorkItem(context.Background(), "Task", fields)
+	if err == nil {
+		t.Fatal("expected error for 400")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error should mention 400: %v", err)
+	}
+	if !strings.Contains(err.Error(), "System.Title") {
+		t.Errorf("error should include response body with field name: %v", err)
+	}
+}
+
+func TestClient_CreateWorkItem_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	fields := map[string]interface{}{FieldTitle: "Test"}
+	_, err := client.CreateWorkItem(context.Background(), "Task", fields)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+	if !strings.Contains(err.Error(), "failed to parse create response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_UpdateWorkItem_Error400(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"Invalid field value"}`))
+	})
+
+	fields := map[string]interface{}{
+		FieldState: "InvalidState",
+	}
+	_, err := client.UpdateWorkItem(context.Background(), 42, fields)
+	if err == nil {
+		t.Fatal("expected error for 400")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error should mention 400: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Invalid field value") {
+		t.Errorf("error should include response body: %v", err)
+	}
+}
+
+func TestClient_UpdateWorkItem_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	fields := map[string]interface{}{FieldState: "Active"}
+	_, err := client.UpdateWorkItem(context.Background(), 42, fields)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+	if !strings.Contains(err.Error(), "failed to parse update response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ListProjects_Error401(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"invalid PAT"}`))
+	})
+
+	_, err := client.ListProjects(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention 401: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid PAT") {
+		t.Errorf("error should include response body: %v", err)
+	}
+}
+
+func TestClient_ListProjects_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	_, err := client.ListProjects(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+	if !strings.Contains(err.Error(), "failed to parse projects response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ListProjects_InvalidValueJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"count":1,"value":"not an array"}`))
+	})
+
+	_, err := client.ListProjects(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid value JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse projects value") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemTypes_Error(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+	})
+
+	_, err := client.GetWorkItemTypes(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention 401: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemTypes_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	_, err := client.GetWorkItemTypes(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work item types response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemTypes_InvalidValueJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"count":1,"value":"not an array"}`))
+	})
+
+	_, err := client.GetWorkItemTypes(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid value JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work item types value") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemStates_Error(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+	})
+
+	_, err := client.GetWorkItemStates(context.Background(), "Bug")
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention 401: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemStates_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	_, err := client.GetWorkItemStates(context.Background(), "Bug")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work item states response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_GetWorkItemStates_InvalidValueJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"count":1,"value":"not an array"}`))
+	})
+
+	_, err := client.GetWorkItemStates(context.Background(), "Bug")
+	if err == nil {
+		t.Fatal("expected error for invalid value JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work item states value") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_fetchWorkItemsByWIQL_EmptyResults(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/wit/wiql") {
+			resp := `{"workItems":[]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+			return
+		}
+		t.Errorf("unexpected request to: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	items, err := client.FetchAllWorkItems(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if items != nil {
+		t.Errorf("expected nil for empty results, got %v", items)
+	}
+}
+
+func TestClient_fetchWorkItemsByWIQL_Error(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"invalid WIQL query"}`))
+	})
+
+	_, err := client.FetchAllWorkItems(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for WIQL failure")
+	}
+	if !strings.Contains(err.Error(), "failed to execute WIQL query") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_fetchWorkItemsByWIQL_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	_, err := client.FetchAllWorkItems(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse WIQL response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_FetchWorkItems_Error(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"work items not found"}`))
+	})
+
+	_, err := client.FetchWorkItems(context.Background(), []int{999})
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch work items") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_FetchWorkItems_InvalidJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	})
+
+	_, err := client.FetchWorkItems(context.Background(), []int{1})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work items response") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_FetchWorkItems_InvalidValueJSON(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"count":1,"value":"not an array"}`))
+	})
+
+	_, err := client.FetchWorkItems(context.Background(), []int{1})
+	if err == nil {
+		t.Fatal("expected error for invalid value JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse work items value") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

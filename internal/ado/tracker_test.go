@@ -2,13 +2,19 @@ package ado
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/tracker"
+	"github.com/steveyegge/beads/internal/types"
 )
 
 // mockStore implements the config methods of storage.Storage for testing.
@@ -621,6 +627,478 @@ func TestAdoWorkItemToTrackerIssue_URLConstruction(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newTestTracker creates a Tracker backed by a mock HTTP server.
+// The handler receives all requests the Client makes.
+func newTestTracker(t *testing.T, handler http.Handler) (*Tracker, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := NewClient(NewSecretString("test-pat"), "testorg", "testproject")
+	client = client.WithBaseURL(server.URL)
+
+	return &Tracker{
+		client:  client,
+		mapper:  NewFieldMapper(nil, nil),
+		baseURL: server.URL,
+		org:     "testorg",
+		project: "testproject",
+	}, server
+}
+
+// workItemJSON builds a JSON-encodable WorkItem map for mock responses.
+func workItemJSON(id, rev int, title, state, wiType string) map[string]interface{} {
+	return map[string]interface{}{
+		"id":  id,
+		"rev": rev,
+		"url": fmt.Sprintf("https://dev.azure.com/testorg/testproject/_apis/wit/workItems/%d", id),
+		"fields": map[string]interface{}{
+			FieldTitle:        title,
+			FieldDescription:  "<p>Description for " + title + "</p>",
+			FieldState:        state,
+			FieldWorkItemType: wiType,
+			FieldPriority:     float64(2),
+			FieldCreatedDate:  "2024-06-01T12:00:00.000Z",
+			FieldChangedDate:  "2024-06-15T09:30:00.000Z",
+			FieldTags:         "tagA; tagB",
+		},
+	}
+}
+
+func TestTracker_FetchIssues(t *testing.T) {
+	tests := []struct {
+		name      string
+		since     *time.Time
+		wantCount int
+	}{
+		{
+			name:      "incremental fetch with since",
+			since:     timePtr(time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)),
+			wantCount: 2,
+		},
+		{
+			name:      "full fetch without since",
+			since:     nil,
+			wantCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+
+			// WIQL endpoint returns two work item refs.
+			mux.HandleFunc("/testproject/_apis/wit/wiql", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					http.Error(w, "expected POST", http.StatusMethodNotAllowed)
+					return
+				}
+				body, _ := io.ReadAll(r.Body)
+				var req WIQLRequest
+				if err := json.Unmarshal(body, &req); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				if !strings.Contains(req.Query, "testproject") {
+					t.Errorf("WIQL query missing project filter: %s", req.Query)
+				}
+				if tt.since != nil && !strings.Contains(req.Query, "ChangedDate") {
+					t.Errorf("WIQL query should contain ChangedDate for incremental sync: %s", req.Query)
+				}
+				resp := WIQLResult{
+					WorkItems: []WIQLWorkItemRef{
+						{ID: 101, URL: "https://dev.azure.com/testorg/testproject/_apis/wit/workItems/101"},
+						{ID: 102, URL: "https://dev.azure.com/testorg/testproject/_apis/wit/workItems/102"},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+			})
+
+			// Work items endpoint returns details.
+			mux.HandleFunc("/testproject/_apis/wit/workitems", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "expected GET", http.StatusMethodNotAllowed)
+					return
+				}
+				ids := r.URL.Query().Get("ids")
+				if ids == "" {
+					http.Error(w, "missing ids", http.StatusBadRequest)
+					return
+				}
+				items := []map[string]interface{}{
+					workItemJSON(101, 1, "Work Item 101", "Active", "Bug"),
+					workItemJSON(102, 3, "Work Item 102", "New", "Task"),
+				}
+				resp := map[string]interface{}{
+					"count": len(items),
+					"value": items,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+			})
+
+			tr, _ := newTestTracker(t, mux)
+			opts := tracker.FetchOptions{}
+			if tt.since != nil {
+				opts.Since = tt.since
+			}
+
+			issues, err := tr.FetchIssues(context.Background(), opts)
+			if err != nil {
+				t.Fatalf("FetchIssues() error: %v", err)
+			}
+			if len(issues) != tt.wantCount {
+				t.Fatalf("FetchIssues() returned %d issues, want %d", len(issues), tt.wantCount)
+			}
+
+			if issues[0].Title != "Work Item 101" {
+				t.Errorf("issues[0].Title = %q, want %q", issues[0].Title, "Work Item 101")
+			}
+			if issues[0].ID != "101" {
+				t.Errorf("issues[0].ID = %q, want %q", issues[0].ID, "101")
+			}
+			if issues[1].Title != "Work Item 102" {
+				t.Errorf("issues[1].Title = %q, want %q", issues[1].Title, "Work Item 102")
+			}
+		})
+	}
+}
+
+func TestTracker_FetchIssues_APIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/wiql", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	_, err := tr.FetchIssues(context.Background(), tracker.FetchOptions{})
+	if err == nil {
+		t.Fatal("FetchIssues() expected error on API failure")
+	}
+}
+
+func TestTracker_FetchIssue(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems", func(w http.ResponseWriter, r *http.Request) {
+		ids := r.URL.Query().Get("ids")
+		if ids != "42" {
+			t.Errorf("expected ids=42, got ids=%s", ids)
+		}
+		items := []map[string]interface{}{
+			workItemJSON(42, 7, "Single Item", "Resolved", "User Story"),
+		}
+		resp := map[string]interface{}{
+			"count": 1,
+			"value": items,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	issue, err := tr.FetchIssue(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("FetchIssue() error: %v", err)
+	}
+	if issue == nil {
+		t.Fatal("FetchIssue() returned nil")
+	}
+	if issue.ID != "42" {
+		t.Errorf("ID = %q, want %q", issue.ID, "42")
+	}
+	if issue.Title != "Single Item" {
+		t.Errorf("Title = %q, want %q", issue.Title, "Single Item")
+	}
+	if issue.State != "Resolved" {
+		t.Errorf("State = %v, want %q", issue.State, "Resolved")
+	}
+	if issue.Type != "User Story" {
+		t.Errorf("Type = %v, want %q", issue.Type, "User Story")
+	}
+}
+
+func TestTracker_FetchIssue_InvalidID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.FetchIssue(context.Background(), "not-a-number")
+	if err == nil {
+		t.Fatal("FetchIssue() expected error for non-numeric ID")
+	}
+	if !strings.Contains(err.Error(), "invalid ADO work item ID") {
+		t.Errorf("error = %q, want mention of invalid ID", err.Error())
+	}
+}
+
+func TestTracker_FetchIssue_NotFound(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems", func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]interface{}{
+			"count": 0,
+			"value": []interface{}{},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	issue, err := tr.FetchIssue(context.Background(), "999")
+	if err != nil {
+		t.Fatalf("FetchIssue() unexpected error: %v", err)
+	}
+	if issue != nil {
+		t.Errorf("FetchIssue() = %v, want nil for missing work item", issue)
+	}
+}
+
+func TestTracker_CreateIssue(t *testing.T) {
+	var receivedOps []PatchOperation
+	var receivedType string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "expected POST", http.StatusMethodNotAllowed)
+			return
+		}
+		ct := r.Header.Get("Content-Type")
+		if !strings.Contains(ct, "application/json-patch+json") {
+			t.Errorf("Content-Type = %q, want json-patch+json", ct)
+		}
+
+		path := r.URL.Path
+		if idx := strings.LastIndex(path, "/$"); idx >= 0 {
+			receivedType = path[idx+2:]
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &receivedOps); err != nil {
+			http.Error(w, "bad patch ops", http.StatusBadRequest)
+			return
+		}
+
+		created := workItemJSON(200, 1, "New Bug", "New", "Bug")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(created)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	issue := &types.Issue{
+		Title:       "New Bug",
+		Description: "A bug description",
+		Priority:    0,
+		Status:      types.StatusOpen,
+		IssueType:   types.TypeBug,
+		Labels:      []string{"urgent", "frontend"},
+	}
+
+	result, err := tr.CreateIssue(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("CreateIssue() error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("CreateIssue() returned nil")
+	}
+	if result.ID != "200" {
+		t.Errorf("ID = %q, want %q", result.ID, "200")
+	}
+
+	if receivedType != "Bug" {
+		t.Errorf("work item type = %q, want %q", receivedType, "Bug")
+	}
+
+	opMap := make(map[string]interface{})
+	for _, op := range receivedOps {
+		opMap[op.Path] = op.Value
+	}
+	if v, ok := opMap["/fields/"+FieldTitle]; !ok || v != "New Bug" {
+		t.Errorf("patch missing/wrong Title: %v", opMap["/fields/"+FieldTitle])
+	}
+	if _, ok := opMap["/fields/"+FieldPriority]; !ok {
+		t.Error("patch missing Priority field")
+	}
+	if _, ok := opMap["/fields/"+FieldState]; !ok {
+		t.Error("patch missing State field")
+	}
+}
+
+func TestTracker_CreateIssue_DefaultType(t *testing.T) {
+	var receivedType string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if idx := strings.LastIndex(path, "/$"); idx >= 0 {
+			receivedType = path[idx+2:]
+		}
+		created := workItemJSON(201, 1, "No Type", "New", "Task")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(created)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	issue := &types.Issue{
+		Title:    "No Type",
+		Priority: 2,
+		Status:   types.StatusOpen,
+	}
+
+	_, err := tr.CreateIssue(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("CreateIssue() error: %v", err)
+	}
+	if receivedType != "Task" {
+		t.Errorf("work item type = %q, want %q (default)", receivedType, "Task")
+	}
+}
+
+func TestTracker_CreateIssue_APIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	_, err := tr.CreateIssue(context.Background(), &types.Issue{
+		Title:     "Will Fail",
+		IssueType: types.TypeTask,
+	})
+	if err == nil {
+		t.Fatal("CreateIssue() expected error on API failure")
+	}
+}
+
+func TestTracker_UpdateIssue(t *testing.T) {
+	var receivedOps []PatchOperation
+	var receivedID string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			http.Error(w, "expected PATCH", http.StatusMethodNotAllowed)
+			return
+		}
+		ct := r.Header.Get("Content-Type")
+		if !strings.Contains(ct, "application/json-patch+json") {
+			t.Errorf("Content-Type = %q, want json-patch+json", ct)
+		}
+
+		path := r.URL.Path
+		parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
+		receivedID = parts[len(parts)-1]
+
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &receivedOps); err != nil {
+			http.Error(w, "bad patch ops", http.StatusBadRequest)
+			return
+		}
+
+		updated := workItemJSON(55, 8, "Updated Title", "Active", "Bug")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(updated)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	issue := &types.Issue{
+		Title:       "Updated Title",
+		Description: "Updated description",
+		Priority:    1,
+		Status:      types.StatusInProgress,
+		IssueType:   types.TypeBug,
+	}
+
+	result, err := tr.UpdateIssue(context.Background(), "55", issue)
+	if err != nil {
+		t.Fatalf("UpdateIssue() error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("UpdateIssue() returned nil")
+	}
+	if result.ID != "55" {
+		t.Errorf("ID = %q, want %q", result.ID, "55")
+	}
+
+	if receivedID != "55" {
+		t.Errorf("URL ID = %q, want %q", receivedID, "55")
+	}
+
+	opMap := make(map[string]interface{})
+	for _, op := range receivedOps {
+		opMap[op.Path] = op.Value
+	}
+	if v, ok := opMap["/fields/"+FieldTitle]; !ok || v != "Updated Title" {
+		t.Errorf("patch Title = %v, want %q", v, "Updated Title")
+	}
+}
+
+func TestTracker_UpdateIssue_InvalidID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.UpdateIssue(context.Background(), "abc", &types.Issue{Title: "x"})
+	if err == nil {
+		t.Fatal("UpdateIssue() expected error for non-numeric ID")
+	}
+	if !strings.Contains(err.Error(), "invalid ADO work item ID") {
+		t.Errorf("error = %q, want mention of invalid ID", err.Error())
+	}
+}
+
+func TestTracker_UpdateIssue_APIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/testproject/_apis/wit/workitems/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	_, err := tr.UpdateIssue(context.Background(), "999", &types.Issue{Title: "x"})
+	if err == nil {
+		t.Fatal("UpdateIssue() expected error on API failure")
+	}
+}
+
+func TestTracker_Validate_Success(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_apis/projects", func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]interface{}{
+			"count": 1,
+			"value": []map[string]interface{}{
+				{"id": "proj-1", "name": "testproject", "state": "wellFormed"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	if err := tr.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestTracker_Validate_APIFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_apis/projects", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+	})
+
+	tr, _ := newTestTracker(t, mux)
+	err := tr.Validate()
+	if err == nil {
+		t.Fatal("Validate() expected error on API failure")
+	}
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error = %q, want mention of 'validation failed'", err.Error())
+	}
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }
 
 // contains is a test helper for substring matching.

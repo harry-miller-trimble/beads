@@ -539,6 +539,215 @@ func TestPushLinks_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestExtractWorkItemID_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"non-URL string", "not-a-url-at-all", true},
+		{"alphabetic suffix", "https://dev.azure.com/org/proj/_apis/wit/workitems/abc", true},
+		{"only slash", "/", true},
+		{"numeric only", "/42", false},
+		{"URL with query params after ID", "https://dev.azure.com/org/proj/_apis/wit/workitems/42?api-version=6.0", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := extractWorkItemID(tt.url)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for URL %q, got id=%d", tt.url, id)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error for URL %q: %v", tt.url, err)
+			}
+		})
+	}
+}
+
+func TestHasDiscoveredFromAttribute(t *testing.T) {
+	tests := []struct {
+		name string
+		attr map[string]interface{}
+		want bool
+	}{
+		{"nil attributes", nil, false},
+		{"empty attributes", map[string]interface{}{}, false},
+		{"no comment key", map[string]interface{}{"name": "test"}, false},
+		{"non-string comment", map[string]interface{}{"comment": 42}, false},
+		{"empty comment string", map[string]interface{}{"comment": ""}, false},
+		{"non-matching comment", map[string]interface{}{"comment": "some other link"}, false},
+		{"matching comment", map[string]interface{}{"comment": "beads:discovered-from"}, true},
+		{"matching comment with extra text", map[string]interface{}{"comment": "link beads:discovered-from here"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasDiscoveredFromAttribute(tt.attr)
+			if got != tt.want {
+				t.Errorf("hasDiscoveredFromAttribute(%v) = %v, want %v", tt.attr, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPullLinks_BadURL(t *testing.T) {
+	wi := &WorkItem{
+		ID: 100,
+		Relations: []WorkItemRelation{
+			{
+				Rel: RelDependsOn,
+				URL: "not-a-valid-url",
+			},
+			{
+				Rel: RelRelated,
+				URL: "https://dev.azure.com/org/proj/_apis/wit/workitems/200",
+			},
+		},
+	}
+
+	resolver := NewLinkResolver(NewClient(NewSecretString("pat"), "org", "proj"))
+	deps := resolver.PullLinks(wi)
+
+	if len(deps) != 1 {
+		t.Fatalf("got %d deps, want 1 (bad URL should be skipped)", len(deps))
+	}
+	assertDep(t, deps[0], "100", "200", "related")
+}
+
+func TestPullLinks_UnknownRelType(t *testing.T) {
+	wi := &WorkItem{
+		ID: 100,
+		Relations: []WorkItemRelation{
+			{
+				Rel: "System.LinkTypes.SomethingNew",
+				URL: "https://dev.azure.com/org/proj/_apis/wit/workitems/200",
+			},
+			{
+				Rel: RelRelated,
+				URL: "https://dev.azure.com/org/proj/_apis/wit/workitems/300",
+			},
+		},
+	}
+
+	resolver := NewLinkResolver(NewClient(NewSecretString("pat"), "org", "proj"))
+	deps := resolver.PullLinks(wi)
+
+	if len(deps) != 1 {
+		t.Fatalf("got %d deps, want 1 (unknown rel type should be skipped)", len(deps))
+	}
+	assertDep(t, deps[0], "100", "300", "related")
+}
+
+func TestPullLinks_NilAttributes(t *testing.T) {
+	wi := &WorkItem{
+		ID: 100,
+		Relations: []WorkItemRelation{
+			{
+				Rel:        RelRelated,
+				URL:        "https://dev.azure.com/org/proj/_apis/wit/workitems/200",
+				Attributes: nil,
+			},
+		},
+	}
+
+	resolver := NewLinkResolver(NewClient(NewSecretString("pat"), "org", "proj"))
+	deps := resolver.PullLinks(wi)
+
+	if len(deps) != 1 {
+		t.Fatalf("got %d deps, want 1", len(deps))
+	}
+	assertDep(t, deps[0], "100", "200", "related")
+}
+
+func TestPushLinks_InvalidExternalID(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	client := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL).
+		WithHTTPClient(ts.Client())
+	resolver := NewLinkResolver(client)
+
+	desired := []tracker.DependencyInfo{
+		{FromExternalID: "100", ToExternalID: "not-a-number", Type: "blocks"},
+		{FromExternalID: "100", ToExternalID: "200", Type: "related"},
+	}
+
+	errs := resolver.PushLinks(context.Background(), 100, nil, desired)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	// Only the valid dep (200) should have been pushed.
+	if callCount != 1 {
+		t.Errorf("expected 1 API call (invalid ID skipped), got %d", callCount)
+	}
+}
+
+func TestPushLinks_RemoveFailure(t *testing.T) {
+	callNum := 0
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callNum++
+		n := callNum
+		mu.Unlock()
+
+		if n == 1 {
+			// First remove fails (400 = permanent, no retry).
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"message":"remove error"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	client := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL).
+		WithHTTPClient(ts.Client())
+	resolver := NewLinkResolver(client)
+
+	currentRelations := []WorkItemRelation{
+		{
+			Rel: RelDependsOn,
+			URL: ts.URL + "/proj/_apis/wit/workitems/200",
+		},
+		{
+			Rel: RelChild,
+			URL: ts.URL + "/proj/_apis/wit/workitems/300",
+		},
+	}
+
+	// No desired deps → both should be removed, but first fails.
+	errs := resolver.PushLinks(context.Background(), 100, currentRelations, nil)
+
+	if len(errs) != 1 {
+		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
+	}
+	if !strings.Contains(errs[0].Error(), "remove relation") {
+		t.Errorf("error should mention remove relation: %v", errs[0])
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Both removes should have been attempted despite first failing.
+	if callNum != 2 {
+		t.Errorf("expected 2 API calls (continue on failure), got %d", callNum)
+	}
+}
+
 // patchCall records a PATCH request's operations for test assertions.
 type patchCall struct {
 	ops []PatchOperation
