@@ -33,7 +33,7 @@ func TestClient_doRequest_Auth(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 
-	_, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	_, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestClient_doRequest_RetryOn429(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
-	body, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	body, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestClient_doRequest_NoRetryOn401(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
 	})
 
-	_, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	_, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
 	if err == nil {
 		t.Fatal("expected error for 401")
 	}

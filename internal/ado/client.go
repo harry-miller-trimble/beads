@@ -137,13 +137,13 @@ func (c *Client) orgBase() string {
 
 // doRequest performs an HTTP request with authentication and retry logic.
 // contentType controls the Content-Type header; pass empty string for GET requests.
-func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType string, body interface{}) ([]byte, http.Header, error) {
+func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType string, body interface{}) ([]byte, error) {
 	var bodyBytes []byte
 	if body != nil {
 		var err error
 		bodyBytes, err = json.Marshal(body)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
 	}
 
@@ -158,7 +158,7 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 
 		req, err := http.NewRequestWithContext(ctx, method, urlStr, reqBody)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Authorization", "Basic "+cred)
@@ -173,7 +173,7 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 				delay := RetryDelay * time.Duration(1<<uint(attempt))
 				select {
 				case <-ctx.Done():
-					return nil, nil, ctx.Err()
+					return nil, ctx.Err()
 				case <-time.After(delay):
 				}
 			}
@@ -188,13 +188,13 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return respBody, resp.Header, nil
+			return respBody, nil
 		}
 
 		// Permanent failures — no retry.
 		switch resp.StatusCode {
 		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-			return nil, nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
+			return nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
 		}
 
 		// Retry on 429 and 5xx server errors.
@@ -211,16 +211,16 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 			lastErr = fmt.Errorf("transient error %d (attempt %d/%d)", resp.StatusCode, attempt+1, MaxRetries+1)
 			select {
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(delay):
 				continue
 			}
 		}
 
-		return nil, nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
+		return nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
 	}
 
-	return nil, nil, fmt.Errorf("max retries (%d) exceeded: %w", MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("max retries (%d) exceeded: %w", MaxRetries+1, lastErr)
 }
 
 // addAPIVersion appends the api-version query parameter to a URL string.
@@ -277,7 +277,7 @@ func (c *Client) FetchWorkItems(ctx context.Context, ids []int) ([]WorkItem, err
 		}
 
 		urlStr := addAPIVersion(c.apiBase() + "/wit/workitems?ids=" + strings.Join(parts, ",") + "&$expand=All")
-		respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+		respBody, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch work items: %w", err)
 		}
@@ -349,7 +349,7 @@ func (c *Client) buildPullWIQL(since *time.Time, filters *PullFilters) string {
 func (c *Client) fetchWorkItemsByWIQL(ctx context.Context, query string) ([]WorkItem, error) {
 	urlStr := addAPIVersion(c.apiBase() + "/wit/wiql")
 	reqBody := WIQLRequest{Query: query}
-	respBody, _, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json", reqBody)
+	respBody, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json", reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute WIQL query: %w", err)
 	}
@@ -399,7 +399,7 @@ func (c *Client) FetchAllWorkItems(ctx context.Context, filters *PullFilters) ([
 func (c *Client) CreateWorkItem(ctx context.Context, typeName string, fields map[string]interface{}) (*WorkItem, error) {
 	ops := buildPatchOps(fields)
 	urlStr := addAPIVersion(c.apiBase() + "/wit/workitems/$" + url.PathEscape(typeName))
-	respBody, _, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json-patch+json", ops)
+	respBody, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json-patch+json", ops)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create work item: %w", err)
 	}
@@ -415,7 +415,7 @@ func (c *Client) CreateWorkItem(ctx context.Context, typeName string, fields map
 func (c *Client) UpdateWorkItem(ctx context.Context, id int, fields map[string]interface{}) (*WorkItem, error) {
 	ops := buildPatchOps(fields)
 	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), id))
-	respBody, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	respBody, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update work item: %w", err)
 	}
@@ -443,7 +443,7 @@ func (c *Client) AddWorkItemLink(ctx context.Context, sourceID int, targetURL, l
 		},
 	}
 	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), sourceID))
-	_, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	_, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
 	if err != nil {
 		return fmt.Errorf("failed to add work item link: %w", err)
 	}
@@ -459,7 +459,7 @@ func (c *Client) RemoveWorkItemLink(ctx context.Context, sourceID, relationIndex
 		},
 	}
 	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), sourceID))
-	_, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	_, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
 	if err != nil {
 		return fmt.Errorf("failed to remove work item link: %w", err)
 	}
@@ -470,7 +470,7 @@ func (c *Client) RemoveWorkItemLink(ctx context.Context, sourceID, relationIndex
 // This is an org-level endpoint, not project-scoped.
 func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	urlStr := addAPIVersion(c.orgBase() + "/projects")
-	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	respBody, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)
 	}
@@ -490,7 +490,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 // GetWorkItemTypes returns the work item types available in the project.
 func (c *Client) GetWorkItemTypes(ctx context.Context) ([]WorkItemType, error) {
 	urlStr := addAPIVersion(c.apiBase() + "/wit/workitemtypes")
-	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	respBody, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get work item types: %w", err)
 	}
@@ -510,7 +510,7 @@ func (c *Client) GetWorkItemTypes(ctx context.Context) ([]WorkItemType, error) {
 // GetWorkItemStates returns the states for a given work item type.
 func (c *Client) GetWorkItemStates(ctx context.Context, typeName string) ([]WorkItemState, error) {
 	urlStr := addAPIVersion(c.apiBase() + "/wit/workitemtypes/" + url.PathEscape(typeName) + "/states")
-	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	respBody, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get work item states: %w", err)
 	}
