@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/ado"
@@ -47,7 +48,13 @@ By default, performs bidirectional sync:
 - Pulls new/updated work items from Azure DevOps to beads
 - Pushes local beads issues to Azure DevOps
 
-Use --pull-only or --push-only to limit direction.`,
+Use --pull-only or --push-only to limit direction.
+
+Pull filters (--area-path, --iteration-path, --types, --states) restrict
+which ADO work items are fetched. Filters can also be persisted via config:
+  ado.filter.area_path, ado.filter.iteration_path,
+  ado.filter.types, ado.filter.states
+CLI flags override config values when both are set.`,
 	RunE: runADOSync,
 }
 
@@ -77,6 +84,12 @@ var (
 	adoBootstrapMatch bool
 	adoNoCreate       bool
 	adoReconcile      bool
+
+	// Pull filter flags
+	adoFilterAreaPath      string
+	adoFilterIterationPath string
+	adoFilterTypes         string
+	adoFilterStates        string
 )
 
 // ADOConflictStrategy defines how to resolve conflicts between local and ADO versions.
@@ -137,6 +150,12 @@ func init() {
 	adoSyncCmd.Flags().BoolVar(&adoBootstrapMatch, "bootstrap-match", false, "Enable heuristic matching for first sync")
 	adoSyncCmd.Flags().BoolVar(&adoNoCreate, "no-create", false, "Pull-only mode: never create issues in ADO")
 	adoSyncCmd.Flags().BoolVar(&adoReconcile, "reconcile", false, "Force reconciliation scan for deleted items")
+
+	// Pull filter flags (override config keys ado.filter.*)
+	adoSyncCmd.Flags().StringVar(&adoFilterAreaPath, "area-path", "", "Filter to ADO area path (e.g., \"Project\\Team\")")
+	adoSyncCmd.Flags().StringVar(&adoFilterIterationPath, "iteration-path", "", "Filter to ADO iteration path (e.g., \"Project\\Sprint 1\")")
+	adoSyncCmd.Flags().StringVar(&adoFilterTypes, "types", "", "Filter to work item types, comma-separated (e.g., \"Bug,Task,User Story\")")
+	adoSyncCmd.Flags().StringVar(&adoFilterStates, "states", "", "Filter to ADO states, comma-separated (e.g., \"New,Active,Resolved\")")
 
 	// Register ado command with root
 	rootCmd.AddCommand(adoCmd)
@@ -239,6 +258,72 @@ func getADOClient(cfg ADOConfig) (*ado.Client, error) {
 		}
 	}
 	return client, nil
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// buildADOPullFilters constructs PullFilters from CLI flags, falling back to
+// config values (ado.filter.*). CLI flags override config when explicitly set.
+// Returns nil when no filters are configured.
+func buildADOPullFilters(ctx context.Context, cmd *cobra.Command) *ado.PullFilters {
+	areaPath := adoFilterAreaPath
+	if !cmd.Flags().Changed("area-path") {
+		if v := getADOConfigValue(ctx, "ado.filter.area_path"); v != "" {
+			areaPath = v
+		}
+	}
+
+	iterationPath := adoFilterIterationPath
+	if !cmd.Flags().Changed("iteration-path") {
+		if v := getADOConfigValue(ctx, "ado.filter.iteration_path"); v != "" {
+			iterationPath = v
+		}
+	}
+
+	typesStr := adoFilterTypes
+	if !cmd.Flags().Changed("types") {
+		if v := getADOConfigValue(ctx, "ado.filter.types"); v != "" {
+			typesStr = v
+		}
+	}
+
+	statesStr := adoFilterStates
+	if !cmd.Flags().Changed("states") {
+		if v := getADOConfigValue(ctx, "ado.filter.states"); v != "" {
+			statesStr = v
+		}
+	}
+
+	types := splitCSV(typesStr)
+	states := splitCSV(statesStr)
+
+	if areaPath == "" && iterationPath == "" && len(types) == 0 && len(states) == 0 {
+		return nil
+	}
+
+	return &ado.PullFilters{
+		AreaPath:      areaPath,
+		IterationPath: iterationPath,
+		WorkItemTypes: types,
+		States:        states,
+	}
 }
 
 // adoStatusResult holds the JSON output for the ado status command.
@@ -388,6 +473,15 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 	at := &ado.Tracker{}
 	if err := at.Init(ctx, store); err != nil {
 		return fmt.Errorf("initializing Azure DevOps tracker: %w", err)
+	}
+
+	// Build pull filters from CLI flags, falling back to config values.
+	filters := buildADOPullFilters(ctx, cmd)
+	if filters != nil {
+		if err := filters.Validate(); err != nil {
+			return fmt.Errorf("invalid pull filter: %w", err)
+		}
+		at.SetFilters(filters)
 	}
 
 	// Create the sync engine

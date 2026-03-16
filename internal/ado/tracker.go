@@ -34,6 +34,7 @@ type Tracker struct {
 	baseURL string // Resolved base URL for external ref matching
 	org     string
 	project string
+	filters *PullFilters // Optional pull filters for WIQL queries
 }
 
 // Name returns the lowercase identifier for this tracker.
@@ -119,6 +120,10 @@ func (t *Tracker) Close() error { return nil }
 // Callers use this for operations like link sync that need direct API access.
 func (t *Tracker) ADOClient() *Client { return t.client }
 
+// SetFilters configures pull filters for WIQL queries.
+// When set, FetchIssues will only return work items matching these filters.
+func (t *Tracker) SetFilters(f *PullFilters) { t.filters = f }
+
 // FetchIssues retrieves work items from Azure DevOps. If opts.Since is set,
 // only work items changed after that time are fetched (incremental sync);
 // otherwise all matching work items in the project are returned (full sync).
@@ -127,9 +132,9 @@ func (t *Tracker) FetchIssues(ctx context.Context, opts tracker.FetchOptions) ([
 	var err error
 
 	if opts.Since != nil {
-		items, err = t.client.FetchWorkItemsSince(ctx, *opts.Since, nil)
+		items, err = t.client.FetchWorkItemsSince(ctx, *opts.Since, t.filters)
 	} else {
-		items, err = t.client.FetchAllWorkItems(ctx, nil)
+		items, err = t.client.FetchAllWorkItems(ctx, t.filters)
 	}
 	if err != nil {
 		return nil, err
