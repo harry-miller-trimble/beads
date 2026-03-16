@@ -1,0 +1,558 @@
+package ado
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// setupTestServer creates an httptest server and a Client pointed at it.
+func setupTestServer(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	client := NewClient(NewSecretString("test-pat"), "testorg", "testproject").
+		WithBaseURL(ts.URL).
+		WithHTTPClient(ts.Client())
+	return client, ts
+}
+
+func TestClient_doRequest_Auth(t *testing.T) {
+	var gotAuth string
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	_, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte(":test-pat"))
+	if gotAuth != expected {
+		t.Errorf("auth header = %q, want %q", gotAuth, expected)
+	}
+}
+
+func TestClient_doRequest_RetryOn429(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"message":"rate limited"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+
+	body, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) < 2 {
+		t.Error("expected at least 2 attempts for 429 retry")
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
+
+func TestClient_doRequest_NoRetryOn401(t *testing.T) {
+	var attempts int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+	})
+
+	_, _, err := client.doRequest(context.Background(), http.MethodGet, client.apiBase()+"/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention 401: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected exactly 1 attempt for 401, got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestClient_apiBase(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		org     string
+		project string
+		want    string
+	}{
+		{
+			name:    "cloud default",
+			baseURL: "",
+			org:     "myorg",
+			project: "myproject",
+			want:    "https://dev.azure.com/myorg/myproject/_apis",
+		},
+		{
+			name:    "on-prem custom URL",
+			baseURL: "https://tfs.example.com/collection",
+			org:     "ignored",
+			project: "myproject",
+			want:    "https://tfs.example.com/collection/myproject/_apis",
+		},
+		{
+			name:    "trailing slash stripped",
+			baseURL: "https://tfs.example.com/collection/",
+			org:     "ignored",
+			project: "myproject",
+			want:    "https://tfs.example.com/collection/myproject/_apis",
+		},
+		{
+			name:    "special characters in project",
+			baseURL: "",
+			org:     "myorg",
+			project: "my project",
+			want:    "https://dev.azure.com/myorg/my%20project/_apis",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewClient(NewSecretString("pat"), tt.org, tt.project)
+			if tt.baseURL != "" {
+				c = c.WithBaseURL(tt.baseURL)
+			}
+			got := c.apiBase()
+			if got != tt.want {
+				t.Errorf("apiBase() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_FetchWorkItems(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitems") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		ids := r.URL.Query().Get("ids")
+		if ids != "1,2,3" {
+			t.Errorf("unexpected ids param: %s", ids)
+		}
+		expand := r.URL.Query().Get("$expand")
+		if expand != "All" {
+			t.Errorf("unexpected expand param: %s", expand)
+		}
+		resp := `{"count":2,"value":[{"id":1,"rev":1,"fields":{"System.Title":"Item 1"},"url":"https://example.com/1"},{"id":2,"rev":2,"fields":{"System.Title":"Item 2"},"url":"https://example.com/2"}]}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	items, err := client.FetchWorkItems(context.Background(), []int{1, 2, 3})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].ID != 1 || items[0].GetStringField("System.Title") != "Item 1" {
+		t.Errorf("unexpected first item: %+v", items[0])
+	}
+}
+
+func TestClient_FetchWorkItems_Batching(t *testing.T) {
+	var requestCount int32
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		ids := r.URL.Query().Get("ids")
+		idList := strings.Split(ids, ",")
+		var items []string
+		for _, id := range idList {
+			items = append(items, fmt.Sprintf(`{"id":%s,"rev":1,"fields":{},"url":"https://example.com/%s"}`, id, id))
+		}
+		resp := fmt.Sprintf(`{"count":%d,"value":[%s]}`, len(items), strings.Join(items, ","))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	// Create 250 IDs to force 2 batches (MaxBatchSize=200).
+	ids := make([]int, 250)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+
+	items, err := client.FetchWorkItems(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 250 {
+		t.Errorf("expected 250 items, got %d", len(items))
+	}
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Errorf("expected 2 batch requests, got %d", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestClient_FetchWorkItems_EmptyIDs(t *testing.T) {
+	requestMade := false
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestMade = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	items, err := client.FetchWorkItems(context.Background(), []int{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if items != nil {
+		t.Errorf("expected nil, got %v", items)
+	}
+	if requestMade {
+		t.Error("no request should be made for empty IDs")
+	}
+}
+
+func TestClient_FetchWorkItemsSince(t *testing.T) {
+	step := 0
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/wit/wiql"):
+			// WIQL query step.
+			if r.Method != http.MethodPost {
+				t.Errorf("WIQL: expected POST, got %s", r.Method)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var req WIQLRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("failed to parse WIQL body: %v", err)
+			}
+			if !strings.Contains(req.Query, "System.ChangedDate") {
+				t.Error("WIQL query should reference ChangedDate")
+			}
+			if !strings.Contains(req.Query, "testproject") {
+				t.Error("WIQL query should reference project name")
+			}
+			resp := `{"workItems":[{"id":10,"url":"https://example.com/10"},{"id":20,"url":"https://example.com/20"}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+			step++
+
+		case strings.Contains(r.URL.Path, "/wit/workitems"):
+			// Batch GET step.
+			if step == 0 {
+				t.Error("batch GET called before WIQL")
+			}
+			resp := `{"count":2,"value":[{"id":10,"rev":1,"fields":{"System.Title":"Item 10"}},{"id":20,"rev":1,"fields":{"System.Title":"Item 20"}}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	since := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	items, err := client.FetchWorkItemsSince(context.Background(), since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+}
+
+func TestClient_CreateWorkItem(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitems/$Task") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/json-patch+json" {
+			t.Errorf("content-type = %q, want application/json-patch+json", ct)
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var ops []PatchOperation
+		if err := json.Unmarshal(body, &ops); err != nil {
+			t.Fatalf("failed to parse patch ops: %v", err)
+		}
+		if len(ops) != 2 {
+			t.Errorf("expected 2 ops, got %d", len(ops))
+		}
+		// Ops should be sorted by path.
+		for _, op := range ops {
+			if op.Op != "add" {
+				t.Errorf("expected op 'add', got %q", op.Op)
+			}
+		}
+
+		resp := `{"id":42,"rev":1,"fields":{"System.Title":"New Task","System.State":"New"},"url":"https://example.com/42"}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	fields := map[string]interface{}{
+		FieldTitle: "New Task",
+		FieldState: "New",
+	}
+	item, err := client.CreateWorkItem(context.Background(), "Task", fields)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.ID != 42 {
+		t.Errorf("expected ID 42, got %d", item.ID)
+	}
+	if item.GetStringField(FieldTitle) != "New Task" {
+		t.Errorf("unexpected title: %s", item.GetStringField(FieldTitle))
+	}
+}
+
+func TestClient_UpdateWorkItem(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitems/42") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/json-patch+json" {
+			t.Errorf("content-type = %q, want application/json-patch+json", ct)
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var ops []PatchOperation
+		if err := json.Unmarshal(body, &ops); err != nil {
+			t.Fatalf("failed to parse patch ops: %v", err)
+		}
+		if len(ops) != 1 {
+			t.Errorf("expected 1 op, got %d", len(ops))
+		}
+
+		resp := `{"id":42,"rev":2,"fields":{"System.Title":"Updated Task","System.State":"Active"},"url":"https://example.com/42"}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	fields := map[string]interface{}{
+		FieldState: "Active",
+	}
+	item, err := client.UpdateWorkItem(context.Background(), 42, fields)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.Rev != 2 {
+		t.Errorf("expected rev 2, got %d", item.Rev)
+	}
+}
+
+func TestClient_ListProjects(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		// ListProjects is org-level — path should NOT include testproject.
+		if strings.Contains(r.URL.Path, "testproject") {
+			t.Errorf("ListProjects should be org-level, got path: %s", r.URL.Path)
+		}
+		if !strings.Contains(r.URL.Path, "/projects") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		resp := `{"count":2,"value":[{"id":"p1","name":"Project Alpha","description":"First","url":"https://example.com/p1","state":"wellFormed"},{"id":"p2","name":"Project Beta","description":"Second","url":"https://example.com/p2","state":"wellFormed"}]}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	projects, err := client.ListProjects(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+	if projects[0].Name != "Project Alpha" {
+		t.Errorf("unexpected name: %s", projects[0].Name)
+	}
+}
+
+func TestClient_GetWorkItemTypes(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitemtypes") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		resp := `{"count":2,"value":[{"name":"Bug","description":"A bug"},{"name":"Task","description":"A task"}]}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	types, err := client.GetWorkItemTypes(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(types) != 2 {
+		t.Fatalf("expected 2 types, got %d", len(types))
+	}
+	if types[0].Name != "Bug" {
+		t.Errorf("unexpected type name: %s", types[0].Name)
+	}
+}
+
+func TestClient_GetWorkItemStates(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitemtypes/Bug/states") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		resp := `{"count":3,"value":[{"name":"New","color":"b2b2b2","category":"Proposed"},{"name":"Active","color":"007acc","category":"InProgress"},{"name":"Closed","color":"339933","category":"Completed"}]}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	states, err := client.GetWorkItemStates(context.Background(), "Bug")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(states) != 3 {
+		t.Fatalf("expected 3 states, got %d", len(states))
+	}
+	if states[0].Name != "New" || states[0].Category != "Proposed" {
+		t.Errorf("unexpected first state: %+v", states[0])
+	}
+}
+
+func TestClient_escapeWIQL(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain string", input: "hello world", want: "hello world"},
+		{name: "single quotes", input: "it's a test", want: "it''s a test"},
+		{name: "backslashes", input: `path\to\thing`, want: `path\\to\\thing`},
+		{name: "both", input: `it's a\path`, want: `it''s a\\path`},
+		{name: "empty", input: "", want: ""},
+		{name: "multiple quotes", input: "a'b'c", want: "a''b''c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeWIQL(tt.input)
+			if got != tt.want {
+				t.Errorf("escapeWIQL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_AddWorkItemLink(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitems/10") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/json-patch+json" {
+			t.Errorf("content-type = %q, want application/json-patch+json", ct)
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var ops []PatchOperation
+		if err := json.Unmarshal(body, &ops); err != nil {
+			t.Fatalf("failed to parse patch ops: %v", err)
+		}
+		if len(ops) != 1 {
+			t.Fatalf("expected 1 op, got %d", len(ops))
+		}
+		if ops[0].Op != "add" {
+			t.Errorf("expected op 'add', got %q", ops[0].Op)
+		}
+		if ops[0].Path != "/relations/-" {
+			t.Errorf("expected path '/relations/-', got %q", ops[0].Path)
+		}
+
+		// Verify the value contains the right relation info.
+		valMap, ok := ops[0].Value.(map[string]interface{})
+		if !ok {
+			// Value may have been re-serialized; unmarshal again.
+			valBytes, _ := json.Marshal(ops[0].Value)
+			valMap = make(map[string]interface{})
+			_ = json.Unmarshal(valBytes, &valMap)
+		}
+		if valMap["rel"] != RelChild {
+			t.Errorf("expected rel %q, got %v", RelChild, valMap["rel"])
+		}
+		if valMap["url"] != "https://example.com/workitems/20" {
+			t.Errorf("unexpected url: %v", valMap["url"])
+		}
+
+		// Return updated work item.
+		resp := `{"id":10,"rev":3,"fields":{},"url":"https://example.com/10"}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	err := client.AddWorkItemLink(context.Background(), 10, "https://example.com/workitems/20", RelChild)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_RemoveWorkItemLink(t *testing.T) {
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitems/10") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var ops []PatchOperation
+		if err := json.Unmarshal(body, &ops); err != nil {
+			t.Fatalf("failed to parse patch ops: %v", err)
+		}
+		if len(ops) != 1 {
+			t.Fatalf("expected 1 op, got %d", len(ops))
+		}
+		if ops[0].Op != "remove" {
+			t.Errorf("expected op 'remove', got %q", ops[0].Op)
+		}
+		if ops[0].Path != "/relations/2" {
+			t.Errorf("expected path '/relations/2', got %q", ops[0].Path)
+		}
+
+		resp := `{"id":10,"rev":4,"fields":{},"url":"https://example.com/10"}`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(resp))
+	})
+
+	err := client.RemoveWorkItemLink(context.Background(), 10, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

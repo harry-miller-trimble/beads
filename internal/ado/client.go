@@ -1,0 +1,402 @@
+package ado
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Client communicates with the Azure DevOps REST API.
+type Client struct {
+	PAT        SecretString
+	BaseURL    string // Custom URL for on-prem; empty = cloud default
+	Org        string
+	Project    string
+	HTTPClient *http.Client
+}
+
+// NewClient creates a new Azure DevOps client with the given PAT, organization, and project.
+func NewClient(pat SecretString, org, project string) *Client {
+	return &Client{
+		PAT:     pat,
+		Org:     org,
+		Project: project,
+		HTTPClient: &http.Client{
+			Timeout: DefaultTimeout,
+		},
+	}
+}
+
+// WithHTTPClient returns a copy of the client configured to use the specified HTTP client.
+func (c *Client) WithHTTPClient(httpClient *http.Client) *Client {
+	return &Client{
+		PAT:        c.PAT,
+		BaseURL:    c.BaseURL,
+		Org:        c.Org,
+		Project:    c.Project,
+		HTTPClient: httpClient,
+	}
+}
+
+// WithBaseURL returns a copy of the client configured to use a custom API base URL.
+// This is useful for on-prem Azure DevOps Server or testing with mock servers.
+func (c *Client) WithBaseURL(baseURL string) *Client {
+	return &Client{
+		PAT:        c.PAT,
+		BaseURL:    strings.TrimSuffix(baseURL, "/"),
+		Org:        c.Org,
+		Project:    c.Project,
+		HTTPClient: c.HTTPClient,
+	}
+}
+
+// apiBase returns the project-scoped _apis URL prefix.
+func (c *Client) apiBase() string {
+	if c.BaseURL != "" {
+		return c.BaseURL + "/" + url.PathEscape(c.Project) + "/_apis"
+	}
+	return DefaultBaseURL + "/" + url.PathEscape(c.Org) + "/" + url.PathEscape(c.Project) + "/_apis"
+}
+
+// orgBase returns the org-level _apis URL prefix (not project-scoped).
+func (c *Client) orgBase() string {
+	if c.BaseURL != "" {
+		return c.BaseURL + "/_apis"
+	}
+	return DefaultBaseURL + "/" + url.PathEscape(c.Org) + "/_apis"
+}
+
+// doRequest performs an HTTP request with authentication and retry logic.
+// contentType controls the Content-Type header; pass empty string for GET requests.
+func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType string, body interface{}) ([]byte, http.Header, error) {
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+	}
+
+	cred := base64.StdEncoding.EncodeToString([]byte(":" + c.PAT.Expose()))
+
+	var lastErr error
+	for attempt := 0; attempt <= MaxRetries; attempt++ {
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, urlStr, reqBody)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Basic "+cred)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+
+		resp, err := c.HTTPClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed (attempt %d/%d): %w", attempt+1, MaxRetries+1, err)
+			if attempt < MaxRetries {
+				delay := RetryDelay * time.Duration(1<<uint(attempt))
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(delay):
+				}
+			}
+			continue
+		}
+
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseSize))
+		_ = resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read response (attempt %d/%d): %w", attempt+1, MaxRetries+1, err)
+			continue
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return respBody, resp.Header, nil
+		}
+
+		// Permanent failures — no retry.
+		switch resp.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return nil, nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
+		}
+
+		// Retry on 429 and 5xx server errors.
+		retriable := resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode >= 500
+
+		if retriable && attempt < MaxRetries {
+			delay := RetryDelay * time.Duration(1<<uint(attempt))
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
+					delay = time.Duration(seconds) * time.Second
+				}
+			}
+			lastErr = fmt.Errorf("transient error %d (attempt %d/%d)", resp.StatusCode, attempt+1, MaxRetries+1)
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(delay):
+				continue
+			}
+		}
+
+		return nil, nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
+	}
+
+	return nil, nil, fmt.Errorf("max retries (%d) exceeded: %w", MaxRetries+1, lastErr)
+}
+
+// addAPIVersion appends the api-version query parameter to a URL string.
+func addAPIVersion(urlStr string) string {
+	if strings.Contains(urlStr, "?") {
+		return urlStr + "&api-version=" + APIVersion
+	}
+	return urlStr + "?api-version=" + APIVersion
+}
+
+// listResponse is a generic envelope for ADO list API responses.
+type listResponse struct {
+	Count int             `json:"count"`
+	Value json.RawMessage `json:"value"`
+}
+
+// escapeWIQL escapes a string for safe inclusion in a WIQL query literal.
+func escapeWIQL(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+// buildPatchOps converts a field map into sorted JSON Patch operations.
+func buildPatchOps(fields map[string]interface{}) []PatchOperation {
+	var ops []PatchOperation
+	for field, value := range fields {
+		ops = append(ops, PatchOperation{
+			Op:    "add",
+			Path:  "/fields/" + field,
+			Value: value,
+		})
+	}
+	sort.Slice(ops, func(i, j int) bool { return ops[i].Path < ops[j].Path })
+	return ops
+}
+
+// FetchWorkItems retrieves work items by ID in batches of MaxBatchSize.
+func (c *Client) FetchWorkItems(ctx context.Context, ids []int) ([]WorkItem, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	var all []WorkItem
+	for start := 0; start < len(ids); start += MaxBatchSize {
+		end := start + MaxBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+
+		parts := make([]string, len(chunk))
+		for i, id := range chunk {
+			parts[i] = strconv.Itoa(id)
+		}
+
+		urlStr := addAPIVersion(c.apiBase() + "/wit/workitems?ids=" + strings.Join(parts, ",") + "&$expand=All")
+		respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch work items: %w", err)
+		}
+
+		var envelope listResponse
+		if err := json.Unmarshal(respBody, &envelope); err != nil {
+			return nil, fmt.Errorf("failed to parse work items response: %w", err)
+		}
+
+		var items []WorkItem
+		if err := json.Unmarshal(envelope.Value, &items); err != nil {
+			return nil, fmt.Errorf("failed to parse work items value: %w", err)
+		}
+		all = append(all, items...)
+	}
+
+	return all, nil
+}
+
+// FetchWorkItemsSince retrieves work items changed since the given time using WIQL.
+func (c *Client) FetchWorkItemsSince(ctx context.Context, since time.Time) ([]WorkItem, error) {
+	sinceStr := since.UTC().Format("2006-01-02T15:04:05Z")
+	query := fmt.Sprintf(
+		"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '%s' AND [System.ChangedDate] >= '%s' AND [System.IsDeleted] = false ORDER BY [System.ChangedDate] ASC",
+		escapeWIQL(c.Project), sinceStr,
+	)
+
+	urlStr := addAPIVersion(c.apiBase() + "/wit/wiql")
+	reqBody := WIQLRequest{Query: query}
+	respBody, _, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json", reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute WIQL query: %w", err)
+	}
+
+	var result WIQLResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse WIQL response: %w", err)
+	}
+
+	if len(result.WorkItems) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]int, len(result.WorkItems))
+	for i, ref := range result.WorkItems {
+		ids[i] = ref.ID
+	}
+
+	return c.FetchWorkItems(ctx, ids)
+}
+
+// CreateWorkItem creates a new work item of the given type with the specified fields.
+func (c *Client) CreateWorkItem(ctx context.Context, typeName string, fields map[string]interface{}) (*WorkItem, error) {
+	ops := buildPatchOps(fields)
+	urlStr := addAPIVersion(c.apiBase() + "/wit/workitems/$" + url.PathEscape(typeName))
+	respBody, _, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json-patch+json", ops)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create work item: %w", err)
+	}
+
+	var item WorkItem
+	if err := json.Unmarshal(respBody, &item); err != nil {
+		return nil, fmt.Errorf("failed to parse create response: %w", err)
+	}
+	return &item, nil
+}
+
+// UpdateWorkItem updates an existing work item's fields.
+func (c *Client) UpdateWorkItem(ctx context.Context, id int, fields map[string]interface{}) (*WorkItem, error) {
+	ops := buildPatchOps(fields)
+	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), id))
+	respBody, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update work item: %w", err)
+	}
+
+	var item WorkItem
+	if err := json.Unmarshal(respBody, &item); err != nil {
+		return nil, fmt.Errorf("failed to parse update response: %w", err)
+	}
+	return &item, nil
+}
+
+// AddWorkItemLink adds a relation link from sourceID to the target work item URL.
+func (c *Client) AddWorkItemLink(ctx context.Context, sourceID int, targetURL, linkType string) error {
+	ops := []PatchOperation{
+		{
+			Op:   "add",
+			Path: "/relations/-",
+			Value: map[string]interface{}{
+				"rel": linkType,
+				"url": targetURL,
+				"attributes": map[string]interface{}{
+					"comment": "",
+				},
+			},
+		},
+	}
+	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), sourceID))
+	_, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	if err != nil {
+		return fmt.Errorf("failed to add work item link: %w", err)
+	}
+	return nil
+}
+
+// RemoveWorkItemLink removes a relation link by index from the given work item.
+func (c *Client) RemoveWorkItemLink(ctx context.Context, sourceID, relationIndex int) error {
+	ops := []PatchOperation{
+		{
+			Op:   "remove",
+			Path: fmt.Sprintf("/relations/%d", relationIndex),
+		},
+	}
+	urlStr := addAPIVersion(fmt.Sprintf("%s/wit/workitems/%d", c.apiBase(), sourceID))
+	_, _, err := c.doRequest(ctx, http.MethodPatch, urlStr, "application/json-patch+json", ops)
+	if err != nil {
+		return fmt.Errorf("failed to remove work item link: %w", err)
+	}
+	return nil
+}
+
+// ListProjects returns all team projects in the organization.
+// This is an org-level endpoint, not project-scoped.
+func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
+	urlStr := addAPIVersion(c.orgBase() + "/projects")
+	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	var envelope listResponse
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse projects response: %w", err)
+	}
+
+	var projects []Project
+	if err := json.Unmarshal(envelope.Value, &projects); err != nil {
+		return nil, fmt.Errorf("failed to parse projects value: %w", err)
+	}
+	return projects, nil
+}
+
+// GetWorkItemTypes returns the work item types available in the project.
+func (c *Client) GetWorkItemTypes(ctx context.Context) ([]WorkItemType, error) {
+	urlStr := addAPIVersion(c.apiBase() + "/wit/workitemtypes")
+	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get work item types: %w", err)
+	}
+
+	var envelope listResponse
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse work item types response: %w", err)
+	}
+
+	var types []WorkItemType
+	if err := json.Unmarshal(envelope.Value, &types); err != nil {
+		return nil, fmt.Errorf("failed to parse work item types value: %w", err)
+	}
+	return types, nil
+}
+
+// GetWorkItemStates returns the states for a given work item type.
+func (c *Client) GetWorkItemStates(ctx context.Context, typeName string) ([]WorkItemState, error) {
+	urlStr := addAPIVersion(c.apiBase() + "/wit/workitemtypes/" + url.PathEscape(typeName) + "/states")
+	respBody, _, err := c.doRequest(ctx, http.MethodGet, urlStr, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get work item states: %w", err)
+	}
+
+	var envelope listResponse
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse work item states response: %w", err)
+	}
+
+	var states []WorkItemState
+	if err := json.Unmarshal(envelope.Value, &states); err != nil {
+		return nil, fmt.Errorf("failed to parse work item states value: %w", err)
+	}
+	return states, nil
+}
