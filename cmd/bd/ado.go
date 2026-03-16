@@ -235,9 +235,36 @@ func getADOClient(cfg ADOConfig) *ado.Client {
 	return client
 }
 
+// adoStatusResult holds the JSON output for the ado status command.
+type adoStatusResult struct {
+	Org        string `json:"org"`
+	Project    string `json:"project"`
+	HasToken   bool   `json:"has_token"`
+	URL        string `json:"url,omitempty"`
+	Configured bool   `json:"configured"`
+	Error      string `json:"error,omitempty"`
+}
+
 // runADOStatus implements the ado status command.
 func runADOStatus(cmd *cobra.Command, _ []string) error {
 	cfg := getADOConfig()
+
+	if jsonOutput {
+		result := adoStatusResult{
+			Org:      cfg.Org,
+			Project:  cfg.Project,
+			HasToken: cfg.PAT != "",
+			URL:      cfg.URL,
+		}
+		if err := validateADOConfig(cfg); err != nil {
+			result.Configured = false
+			result.Error = err.Error()
+		} else {
+			result.Configured = true
+		}
+		outputJSON(result)
+		return nil
+	}
 
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintln(out, "Azure DevOps Configuration")
@@ -300,6 +327,19 @@ func runADOProjects(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// adoSyncResult holds the JSON output for the ado sync command.
+type adoSyncResult struct {
+	DryRun    bool     `json:"dry_run"`
+	Pulled    int      `json:"pulled"`
+	Pushed    int      `json:"pushed"`
+	Created   int      `json:"created"`
+	Updated   int      `json:"updated"`
+	Skipped   int      `json:"skipped"`
+	Conflicts int      `json:"conflicts"`
+	Errors    int      `json:"errors"`
+	Warnings  []string `json:"warnings,omitempty"`
+}
+
 // runADOSync implements the ado sync command.
 // Uses the tracker.Engine for all sync operations.
 func runADOSync(cmd *cobra.Command, _ []string) error {
@@ -337,7 +377,9 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 
 	// Create the sync engine
 	engine := tracker.NewEngine(at, store, actor)
-	engine.OnMessage = func(msg string) { _, _ = fmt.Fprintln(out, "  "+msg) }
+	if !jsonOutput {
+		engine.OnMessage = func(msg string) { _, _ = fmt.Fprintln(out, "  "+msg) }
+	}
 	engine.OnWarning = func(msg string) { _, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg) }
 
 	// Set up ADO-specific pull hooks
@@ -363,7 +405,7 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		opts.ConflictResolution = tracker.ConflictTimestamp
 	}
 
-	if adoSyncDryRun {
+	if adoSyncDryRun && !jsonOutput {
 		_, _ = fmt.Fprintln(out, "Dry run mode - no changes will be made")
 		_, _ = fmt.Fprintln(out)
 	}
@@ -375,7 +417,24 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Output results
+	// JSON output
+	if jsonOutput {
+		syncResult := adoSyncResult{
+			DryRun:    adoSyncDryRun,
+			Pulled:    result.Stats.Pulled,
+			Pushed:    result.Stats.Pushed,
+			Created:   result.Stats.Created,
+			Updated:   result.Stats.Updated,
+			Skipped:   result.Stats.Skipped,
+			Conflicts: result.Stats.Conflicts,
+			Errors:    result.Stats.Errors,
+			Warnings:  result.Warnings,
+		}
+		outputJSON(syncResult)
+		return nil
+	}
+
+	// Human-readable output
 	if !adoSyncDryRun {
 		if result.Stats.Pulled > 0 {
 			_, _ = fmt.Fprintf(out, "✓ Pulled %d issues (%d created, %d updated)\n",
