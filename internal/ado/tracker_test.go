@@ -324,6 +324,18 @@ func TestTracker_BuildExternalRef(t *testing.T) {
 			issue:   &tracker.TrackerIssue{Identifier: "77"},
 			want:    "ado:77",
 		},
+		{
+			name:    "URL-encodes project with spaces",
+			tracker: &Tracker{org: "myorg", project: "My Project"},
+			issue:   &tracker.TrackerIssue{Identifier: "88"},
+			want:    "https://dev.azure.com/myorg/My%20Project/_workitems/edit/88",
+		},
+		{
+			name:    "URL-encodes on-prem project with spaces",
+			tracker: &Tracker{baseURL: "https://tfs.corp.com/col", project: "My Project"},
+			issue:   &tracker.TrackerIssue{Identifier: "66"},
+			want:    "https://tfs.corp.com/col/My%20Project/_workitems/edit/66",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

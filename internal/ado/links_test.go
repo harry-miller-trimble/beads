@@ -288,6 +288,11 @@ func TestExtractWorkItemID(t *testing.T) {
 			url:     "https://dev.azure.com/org/proj/_apis/wit/workitems/42/",
 			wantErr: true,
 		},
+		{
+			name:   "URL with query params",
+			url:    "https://dev.azure.com/org/proj/_apis/wit/workitems/42?api-version=7.1",
+			wantID: 42,
+		},
 	}
 
 	for _, tt := range tests {
@@ -560,7 +565,7 @@ func TestExtractWorkItemID_EdgeCases(t *testing.T) {
 		{"alphabetic suffix", "https://dev.azure.com/org/proj/_apis/wit/workitems/abc", true},
 		{"only slash", "/", true},
 		{"numeric only", "/42", false},
-		{"URL with query params after ID", "https://dev.azure.com/org/proj/_apis/wit/workitems/42?api-version=6.0", true},
+		{"URL with query params after ID", "https://dev.azure.com/org/proj/_apis/wit/workitems/42?api-version=6.0", false},
 	}
 
 	for _, tt := range tests {

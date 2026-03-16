@@ -51,10 +51,22 @@ func (m *adoFieldMapper) IssueToBeads(ti *tracker.TrackerIssue) *tracker.IssueCo
 	// is lossy (beads 3 and 4 both map to ADO 4).
 	if ti.Metadata != nil {
 		if bp, ok := ti.Metadata["beads_priority"]; ok {
-			if bpStr, ok := bp.(string); ok {
-				if p, err := strconv.Atoi(bpStr); err == nil && p >= 0 && p <= 4 {
-					issue.Priority = p
+			var p int
+			var valid bool
+			switch v := bp.(type) {
+			case string:
+				if n, err := strconv.Atoi(v); err == nil {
+					p, valid = n, true
 				}
+			case float64:
+				p, valid = int(v), true
+			case json.Number:
+				if n, err := v.Int64(); err == nil {
+					p, valid = int(n), true
+				}
+			}
+			if valid && p >= 0 && p <= 4 {
+				issue.Priority = p
 			}
 		}
 	}
@@ -81,7 +93,7 @@ func (m *adoFieldMapper) IssueToBeads(ti *tracker.TrackerIssue) *tracker.IssueCo
 		}
 	}
 
-	return &tracker.IssueConversion{Issue: issue}
+	return &tracker.IssueConversion{Issue: issue, Dependencies: ExtractLinkDeps(wi)}
 }
 
 // IssueToTracker converts a beads Issue to a map of ADO work item field values.

@@ -523,7 +523,7 @@ func TestClient_AddWorkItemLink(t *testing.T) {
 		_, _ = w.Write([]byte(resp))
 	})
 
-	err := client.AddWorkItemLink(context.Background(), 10, "https://example.com/workitems/20", RelChild)
+	err := client.AddWorkItemLink(context.Background(), 10, "https://example.com/workitems/20", RelChild, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1435,6 +1435,7 @@ func TestValidateURLScheme(t *testing.T) {
 		{name: "https on-prem", url: "https://tfs.example.com/collection", wantErr: false},
 		{name: "http localhost", url: "http://localhost:8080/api", wantErr: false},
 		{name: "http 127.0.0.1", url: "http://127.0.0.1:9090", wantErr: false},
+		{name: "http IPv6 localhost", url: "http://[::1]:8080/api", wantErr: false},
 		{name: "http remote rejected", url: "http://ado.example.com/org", wantErr: true},
 		{name: "http IP rejected", url: "http://10.0.0.1:8080/api", wantErr: true},
 		{name: "unparseable URL", url: "://bad", wantErr: true},

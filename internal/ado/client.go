@@ -113,7 +113,7 @@ func validateURLScheme(rawURL string) error {
 	if err != nil {
 		return err
 	}
-	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1" {
 		return fmt.Errorf("HTTPS required for ADO connections (got %s); use https:// or localhost for testing", rawURL)
 	}
 	return nil
@@ -464,7 +464,8 @@ func (c *Client) UpdateWorkItem(ctx context.Context, id int, fields map[string]i
 }
 
 // AddWorkItemLink adds a relation link from sourceID to the target work item URL.
-func (c *Client) AddWorkItemLink(ctx context.Context, sourceID int, targetURL, linkType string) error {
+// The comment parameter sets the relation comment attribute; pass "" for no comment.
+func (c *Client) AddWorkItemLink(ctx context.Context, sourceID int, targetURL, linkType, comment string) error {
 	ops := []PatchOperation{
 		{
 			Op:   "add",
@@ -473,7 +474,7 @@ func (c *Client) AddWorkItemLink(ctx context.Context, sourceID int, targetURL, l
 				"rel": linkType,
 				"url": targetURL,
 				"attributes": map[string]interface{}{
-					"comment": "",
+					"comment": comment,
 				},
 			},
 		},

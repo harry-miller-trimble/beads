@@ -23,7 +23,8 @@ func NewLinkResolver(client *Client) *LinkResolver {
 }
 
 // workItemIDPattern extracts a work item ID from an ADO API URL.
-var workItemIDPattern = regexp.MustCompile(`/(\d+)$`)
+// Handles URLs with query parameters (e.g. ?api-version=7.1).
+var workItemIDPattern = regexp.MustCompile(`/(\d+)(?:\?|$)`)
 
 // extractWorkItemID extracts the numeric ID from an ADO work item API URL.
 func extractWorkItemID(url string) (int, error) {
@@ -110,10 +111,11 @@ func (r *LinkResolver) buildWorkItemURL(id int) string {
 	return fmt.Sprintf("%s/wit/workitems/%d", base, id)
 }
 
-// PullLinks extracts beads dependency information from an ADO work item's relations.
-// It normalizes link directions and maps ADO relation types to beads dependency types.
-// Returns a slice of DependencyInfo for the sync engine to process.
-func (r *LinkResolver) PullLinks(workItem *WorkItem) []tracker.DependencyInfo {
+// ExtractLinkDeps extracts beads dependency information from an ADO work item's
+// relations. It normalizes link directions and maps ADO relation types to beads
+// dependency types. This is the package-level function used by both PullLinks
+// and the field mapper's IssueToBeads.
+func ExtractLinkDeps(workItem *WorkItem) []tracker.DependencyInfo {
 	if len(workItem.Relations) == 0 {
 		return nil
 	}
@@ -153,6 +155,13 @@ func (r *LinkResolver) PullLinks(workItem *WorkItem) []tracker.DependencyInfo {
 	}
 
 	return deps
+}
+
+// PullLinks extracts beads dependency information from an ADO work item's relations.
+// It normalizes link directions and maps ADO relation types to beads dependency types.
+// Returns a slice of DependencyInfo for the sync engine to process.
+func (r *LinkResolver) PullLinks(workItem *WorkItem) []tracker.DependencyInfo {
+	return ExtractLinkDeps(workItem)
 }
 
 // adoLinkKey is used to identify a unique link for diffing.
@@ -235,7 +244,11 @@ func (r *LinkResolver) PushLinks(ctx context.Context, workItemID int, currentRel
 		}
 		targetURL := r.buildWorkItemURL(key.TargetID)
 		rel := beadsDepToADORel(dep.Type)
-		if err := r.Client.AddWorkItemLink(ctx, workItemID, targetURL, rel); err != nil {
+		comment := ""
+		if dep.Type == "discovered-from" {
+			comment = discoveredFromComment
+		}
+		if err := r.Client.AddWorkItemLink(ctx, workItemID, targetURL, rel, comment); err != nil {
 			errs = append(errs, fmt.Errorf("add link %s to %d: %w", rel, key.TargetID, err))
 		}
 	}

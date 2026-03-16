@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/ado"
 	"github.com/steveyegge/beads/internal/config"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/tracker"
 	"github.com/steveyegge/beads/internal/types"
@@ -345,6 +346,7 @@ type adoSyncResult struct {
 	Skipped          int      `json:"skipped"`
 	Conflicts        int      `json:"conflicts"`
 	Errors           int      `json:"errors"`
+	LinksPushed      int      `json:"links_pushed,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
 	BootstrapMatched int      `json:"bootstrap_matched,omitempty"`
 	Reconciled       bool     `json:"reconciled,omitempty"`
@@ -435,6 +437,18 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Link push pass: sync beads dependencies → ADO work item relations.
+	var linksPushed int
+	if !adoSyncDryRun && push {
+		adoClient := at.ADOClient()
+		if adoClient != nil {
+			linkResolver := ado.NewLinkResolver(adoClient)
+			lp, linkWarns := pushADOLinks(ctx, linkResolver, at, store, engine.OnWarning)
+			linksPushed = lp
+			warnings = append(warnings, linkWarns...)
+		}
+	}
+
 	// Reconciliation: detect deleted/inaccessible ADO work items.
 	var reconcileResult *ado.ReconcileResult
 	if !adoSyncDryRun {
@@ -446,7 +460,11 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 
 		shouldReconcile := adoReconcile || reconciler.ShouldReconcile(ctx)
 		if shouldReconcile {
-			workItemIDs := collectADOWorkItemIDs(ctx, at)
+			adoIDMap := collectADOWorkItemMap(ctx, at)
+			workItemIDs := make([]int, 0, len(adoIDMap))
+			for id := range adoIDMap {
+				workItemIDs = append(workItemIDs, id)
+			}
 			if len(workItemIDs) > 0 {
 				rr, rerr := reconciler.Reconcile(ctx, workItemIDs)
 				if rerr != nil {
@@ -456,11 +474,29 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 					}
 				} else {
 					reconcileResult = rr
-					for _, id := range rr.Deleted {
-						msg := fmt.Sprintf("ADO work item %s deleted (404)", id)
-						warnings = append(warnings, msg)
-						if !jsonOutput {
-							_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+					// Close local issues whose ADO work items were deleted.
+					for _, idStr := range rr.Deleted {
+						adoID, err := strconv.Atoi(idStr)
+						if err != nil {
+							continue
+						}
+						localID, ok := adoIDMap[adoID]
+						if !ok {
+							continue
+						}
+						reason := fmt.Sprintf("ADO work item %s deleted", idStr)
+						if cerr := store.CloseIssue(ctx, localID, reason, actor, ""); cerr != nil {
+							msg := fmt.Sprintf("Failed to close %s for deleted ADO #%s: %v", localID, idStr, cerr)
+							warnings = append(warnings, msg)
+							if !jsonOutput {
+								_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+							}
+						} else {
+							msg := fmt.Sprintf("Closed %s: ADO work item %s deleted", localID, idStr)
+							warnings = append(warnings, msg)
+							if !jsonOutput {
+								_, _ = fmt.Fprintf(out, "  %s\n", msg)
+							}
 						}
 					}
 					for _, id := range rr.Denied {
@@ -494,6 +530,7 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 			Skipped:          result.Stats.Skipped,
 			Conflicts:        result.Stats.Conflicts,
 			Errors:           result.Stats.Errors,
+			LinksPushed:      linksPushed,
 			Warnings:         append(result.Warnings, warnings...),
 			BootstrapMatched: bootstrapMatched,
 		}
@@ -519,6 +556,9 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		if result.Stats.Pushed > 0 {
 			_, _ = fmt.Fprintf(out, "✓ Pushed %d issues\n", result.Stats.Pushed)
 		}
+		if linksPushed > 0 {
+			_, _ = fmt.Fprintf(out, "✓ Synced %d dependency links\n", linksPushed)
+		}
 		if result.Stats.Conflicts > 0 {
 			_, _ = fmt.Fprintf(out, "→ Resolved %d conflicts\n", result.Stats.Conflicts)
 		}
@@ -540,15 +580,15 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// collectADOWorkItemIDs gathers numeric ADO work item IDs from local issues
-// that have ADO external refs.
-func collectADOWorkItemIDs(ctx context.Context, at *ado.Tracker) []int {
+// collectADOWorkItemMap gathers ADO work item IDs from local issues that
+// have ADO external refs, returning a map of ADO numeric ID → local issue ID.
+func collectADOWorkItemMap(ctx context.Context, at *ado.Tracker) map[int]string {
 	allIssues, err := store.SearchIssues(ctx, "", types.IssueFilter{})
 	if err != nil {
 		return nil
 	}
 
-	var ids []int
+	m := make(map[int]string)
 	for _, issue := range allIssues {
 		if issue.ExternalRef == nil {
 			continue
@@ -559,10 +599,91 @@ func collectADOWorkItemIDs(ctx context.Context, at *ado.Tracker) []int {
 		}
 		idStr := at.ExtractIdentifier(ref)
 		if id, err := strconv.Atoi(idStr); err == nil {
-			ids = append(ids, id)
+			m[id] = issue.ID
 		}
 	}
-	return ids
+	return m
+}
+
+// pushADOLinks syncs beads dependencies to ADO work item relations for all
+// local issues with ADO external refs. Returns the number of links synced
+// and any warnings.
+func pushADOLinks(ctx context.Context, resolver *ado.LinkResolver, at *ado.Tracker, st storage.Storage, warn func(string)) (int, []string) {
+	allIssues, err := st.SearchIssues(ctx, "", types.IssueFilter{})
+	if err != nil {
+		return 0, []string{fmt.Sprintf("Link sync skipped: %v", err)}
+	}
+
+	var warnings []string
+	linkCount := 0
+
+	for _, issue := range allIssues {
+		if issue.ExternalRef == nil {
+			continue
+		}
+		ref := *issue.ExternalRef
+		if !at.IsExternalRef(ref) {
+			continue
+		}
+		extIDStr := at.ExtractIdentifier(ref)
+		workItemID, err := strconv.Atoi(extIDStr)
+		if err != nil {
+			continue
+		}
+
+		// Get local dependencies for this issue.
+		deps, err := st.GetDependenciesWithMetadata(ctx, issue.ID)
+		if err != nil {
+			continue
+		}
+
+		// Build desired DependencyInfo list, resolving local IDs to ADO external IDs.
+		var desired []tracker.DependencyInfo
+		for _, dep := range deps {
+			if dep.ExternalRef == nil {
+				continue
+			}
+			depRef := *dep.ExternalRef
+			if !at.IsExternalRef(depRef) {
+				continue
+			}
+			targetExtID := at.ExtractIdentifier(depRef)
+			if targetExtID == "" {
+				continue
+			}
+			desired = append(desired, tracker.DependencyInfo{
+				FromExternalID: extIDStr,
+				ToExternalID:   targetExtID,
+				Type:           string(dep.DependencyType),
+			})
+		}
+
+		if len(desired) == 0 {
+			continue
+		}
+
+		// Fetch current ADO work item to get existing relations.
+		adoClient := at.ADOClient()
+		items, ferr := adoClient.FetchWorkItems(ctx, []int{workItemID})
+		if ferr != nil || len(items) == 0 {
+			if warn != nil {
+				warn(fmt.Sprintf("Failed to fetch ADO #%d for link sync: %v", workItemID, ferr))
+			}
+			continue
+		}
+
+		errs := resolver.PushLinks(ctx, workItemID, items[0].Relations, desired)
+		for _, e := range errs {
+			msg := fmt.Sprintf("Link sync ADO #%d: %v", workItemID, e)
+			warnings = append(warnings, msg)
+			if warn != nil {
+				warn(msg)
+			}
+		}
+		linkCount += len(desired) - len(errs)
+	}
+
+	return linkCount, warnings
 }
 
 // buildADOPullHooks creates PullHooks for ADO-specific pull behavior.
@@ -591,11 +712,12 @@ func buildADOPullHooks(ctx context.Context, at *ado.Tracker, bootstrapMatch, noC
 	}
 
 	if bootstrapMatch || noCreate {
-		// Pre-load local issues for bootstrap matching.
-		var localIssues []*types.Issue
+		// Pre-load and index local issues for bootstrap matching.
+		var idx *ado.BootstrapIndex
 		var bm *ado.BootstrapMatcher
 		if bootstrapMatch {
-			localIssues, _ = store.SearchIssues(ctx, "", types.IssueFilter{})
+			localIssues, _ := store.SearchIssues(ctx, "", types.IssueFilter{})
+			idx = ado.BuildBootstrapIndex(localIssues)
 			bm = ado.NewBootstrapMatcher(at.FieldMapper(), true)
 		}
 
@@ -607,9 +729,9 @@ func buildADOPullHooks(ctx context.Context, at *ado.Tracker, bootstrapMatch, noC
 				return true // Already linked; let engine handle update.
 			}
 
-			// Try bootstrap matching against local issues.
+			// Try bootstrap matching against indexed local issues.
 			if bm != nil {
-				result := bm.FindMatch(extIssue, localIssues)
+				result := bm.FindMatchIndexed(extIssue, idx)
 				if result.Matched {
 					// Link the existing local issue to this ADO item.
 					updates := map[string]interface{}{

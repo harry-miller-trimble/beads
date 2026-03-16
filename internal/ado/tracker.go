@@ -3,6 +3,7 @@ package ado
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -113,6 +114,10 @@ func (t *Tracker) Validate() error {
 
 // Close releases any resources held by the tracker.
 func (t *Tracker) Close() error { return nil }
+
+// ADOClient returns the underlying ADO API client.
+// Callers use this for operations like link sync that need direct API access.
+func (t *Tracker) ADOClient() *Client { return t.client }
 
 // FetchIssues retrieves work items from Azure DevOps. If opts.Since is set,
 // only work items changed after that time are fetched (incremental sync);
@@ -232,11 +237,11 @@ func (t *Tracker) BuildExternalRef(issue *tracker.TrackerIssue) string {
 	}
 	if t.org != "" && t.project != "" {
 		return fmt.Sprintf("%s/%s/%s/_workitems/edit/%s",
-			DefaultBaseURL, t.org, t.project, issue.Identifier)
+			DefaultBaseURL, url.PathEscape(t.org), url.PathEscape(t.project), issue.Identifier)
 	}
 	if t.baseURL != "" && t.project != "" {
 		return fmt.Sprintf("%s/%s/_workitems/edit/%s",
-			t.baseURL, t.project, issue.Identifier)
+			t.baseURL, url.PathEscape(t.project), issue.Identifier)
 	}
 	return fmt.Sprintf("ado:%s", issue.Identifier)
 }
