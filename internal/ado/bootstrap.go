@@ -23,13 +23,13 @@ type MatchResult struct {
 
 // BootstrapMatcher handles deduplication during first sync.
 type BootstrapMatcher struct {
-	Mapper         *adoFieldMapper
+	Mapper         tracker.FieldMapper
 	HeuristicMatch bool // Whether heuristic matching is enabled (--bootstrap-match)
 }
 
 // NewBootstrapMatcher creates a new matcher. Set heuristicMatch=true to enable
 // title+type+time matching (opt-in via --bootstrap-match flag).
-func NewBootstrapMatcher(mapper *adoFieldMapper, heuristicMatch bool) *BootstrapMatcher {
+func NewBootstrapMatcher(mapper tracker.FieldMapper, heuristicMatch bool) *BootstrapMatcher {
 	return &BootstrapMatcher{
 		Mapper:         mapper,
 		HeuristicMatch: heuristicMatch,

@@ -775,7 +775,10 @@ func TestADOClientCreation(t *testing.T) {
 		Org:     "myorg",
 		Project: "myproject",
 	}
-	client := getADOClient(cfg)
+	client, err := getADOClient(cfg)
+	if err != nil {
+		t.Fatalf("getADOClient() returned error: %v", err)
+	}
 	if client == nil {
 		t.Fatal("getADOClient() returned nil")
 	}
@@ -795,7 +798,10 @@ func TestADOClientCreationWithURL(t *testing.T) {
 		Project: "proj",
 		URL:     "https://tfs.corp.com/DefaultCollection",
 	}
-	client := getADOClient(cfg)
+	client, err := getADOClient(cfg)
+	if err != nil {
+		t.Fatalf("getADOClient() returned error: %v", err)
+	}
 	if client == nil {
 		t.Fatal("getADOClient() returned nil")
 	}

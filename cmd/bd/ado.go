@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/ado"
@@ -227,12 +228,16 @@ func maskADOToken(token string) string {
 }
 
 // getADOClient creates an Azure DevOps client from the current configuration.
-func getADOClient(cfg ADOConfig) *ado.Client {
+func getADOClient(cfg ADOConfig) (*ado.Client, error) {
 	client := ado.NewClient(ado.NewSecretString(cfg.PAT), cfg.Org, cfg.Project)
 	if cfg.URL != "" {
-		client = client.WithBaseURL(cfg.URL)
+		var err error
+		client, err = client.WithBaseURL(cfg.URL)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return client
+	return client, nil
 }
 
 // adoStatusResult holds the JSON output for the ado status command.
@@ -298,7 +303,10 @@ func runADOProjects(cmd *cobra.Command, _ []string) error {
 	}
 
 	out := cmd.OutOrStdout()
-	client := getADOClient(cfg)
+	client, err := getADOClient(cfg)
+	if err != nil {
+		return fmt.Errorf("invalid ADO configuration: %w", err)
+	}
 	ctx := context.Background()
 
 	projects, err := client.ListProjects(ctx)
@@ -329,15 +337,20 @@ func runADOProjects(cmd *cobra.Command, _ []string) error {
 
 // adoSyncResult holds the JSON output for the ado sync command.
 type adoSyncResult struct {
-	DryRun    bool     `json:"dry_run"`
-	Pulled    int      `json:"pulled"`
-	Pushed    int      `json:"pushed"`
-	Created   int      `json:"created"`
-	Updated   int      `json:"updated"`
-	Skipped   int      `json:"skipped"`
-	Conflicts int      `json:"conflicts"`
-	Errors    int      `json:"errors"`
-	Warnings  []string `json:"warnings,omitempty"`
+	DryRun           bool     `json:"dry_run"`
+	Pulled           int      `json:"pulled"`
+	Pushed           int      `json:"pushed"`
+	Created          int      `json:"created"`
+	Updated          int      `json:"updated"`
+	Skipped          int      `json:"skipped"`
+	Conflicts        int      `json:"conflicts"`
+	Errors           int      `json:"errors"`
+	Warnings         []string `json:"warnings,omitempty"`
+	BootstrapMatched int      `json:"bootstrap_matched,omitempty"`
+	Reconciled       bool     `json:"reconciled,omitempty"`
+	ReconcileChecked int      `json:"reconcile_checked,omitempty"`
+	ReconcileDeleted int      `json:"reconcile_deleted,omitempty"`
+	ReconcileDenied  int      `json:"reconcile_denied,omitempty"`
 }
 
 // runADOSync implements the ado sync command.
@@ -377,13 +390,18 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 
 	// Create the sync engine
 	engine := tracker.NewEngine(at, store, actor)
+	var warnings []string
 	if !jsonOutput {
 		engine.OnMessage = func(msg string) { _, _ = fmt.Fprintln(out, "  "+msg) }
 	}
-	engine.OnWarning = func(msg string) { _, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg) }
+	engine.OnWarning = func(msg string) {
+		warnings = append(warnings, msg)
+		_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+	}
 
-	// Set up ADO-specific pull hooks
-	engine.PullHooks = buildADOPullHooks(ctx)
+	// Set up ADO-specific pull hooks (with bootstrap matching and no-create support)
+	var bootstrapMatched int
+	engine.PullHooks = buildADOPullHooks(ctx, at, adoBootstrapMatch, adoNoCreate, &bootstrapMatched, engine.OnWarning)
 
 	// Build sync options from CLI flags
 	pull := !adoSyncPushOnly
@@ -417,18 +435,73 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Reconciliation: detect deleted/inaccessible ADO work items.
+	var reconcileResult *ado.ReconcileResult
+	if !adoSyncDryRun {
+		client, cerr := getADOClient(cfg)
+		if cerr != nil {
+			warnings = append(warnings, fmt.Sprintf("Reconciliation skipped: %v", cerr))
+		} else {
+		reconciler := ado.NewReconciler(client, store)
+
+		shouldReconcile := adoReconcile || reconciler.ShouldReconcile(ctx)
+		if shouldReconcile {
+			workItemIDs := collectADOWorkItemIDs(ctx, at)
+			if len(workItemIDs) > 0 {
+				rr, rerr := reconciler.Reconcile(ctx, workItemIDs)
+				if rerr != nil {
+					warnings = append(warnings, fmt.Sprintf("Reconciliation failed: %v", rerr))
+					if !jsonOutput {
+						_, _ = fmt.Fprintf(os.Stderr, "Warning: Reconciliation failed: %v\n", rerr)
+					}
+				} else {
+					reconcileResult = rr
+					for _, id := range rr.Deleted {
+						msg := fmt.Sprintf("ADO work item %s deleted (404)", id)
+						warnings = append(warnings, msg)
+						if !jsonOutput {
+							_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+						}
+					}
+					for _, id := range rr.Denied {
+						msg := fmt.Sprintf("ADO work item %s access denied (403)", id)
+						warnings = append(warnings, msg)
+						if !jsonOutput {
+							_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+						}
+					}
+				}
+			}
+			if err := reconciler.ResetCounter(ctx); err != nil && !jsonOutput {
+				_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to reset reconcile counter: %v\n", err)
+			}
+		} else {
+			if err := reconciler.IncrementCounter(ctx); err != nil && !jsonOutput {
+				_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to increment reconcile counter: %v\n", err)
+			}
+		}
+		}
+	}
+
 	// JSON output
 	if jsonOutput {
 		syncResult := adoSyncResult{
-			DryRun:    adoSyncDryRun,
-			Pulled:    result.Stats.Pulled,
-			Pushed:    result.Stats.Pushed,
-			Created:   result.Stats.Created,
-			Updated:   result.Stats.Updated,
-			Skipped:   result.Stats.Skipped,
-			Conflicts: result.Stats.Conflicts,
-			Errors:    result.Stats.Errors,
-			Warnings:  result.Warnings,
+			DryRun:           adoSyncDryRun,
+			Pulled:           result.Stats.Pulled,
+			Pushed:           result.Stats.Pushed,
+			Created:          result.Stats.Created,
+			Updated:          result.Stats.Updated,
+			Skipped:          result.Stats.Skipped,
+			Conflicts:        result.Stats.Conflicts,
+			Errors:           result.Stats.Errors,
+			Warnings:         append(result.Warnings, warnings...),
+			BootstrapMatched: bootstrapMatched,
+		}
+		if reconcileResult != nil {
+			syncResult.Reconciled = true
+			syncResult.ReconcileChecked = reconcileResult.Checked
+			syncResult.ReconcileDeleted = len(reconcileResult.Deleted)
+			syncResult.ReconcileDenied = len(reconcileResult.Denied)
 		}
 		outputJSON(syncResult)
 		return nil
@@ -436,6 +509,9 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 
 	// Human-readable output
 	if !adoSyncDryRun {
+		if bootstrapMatched > 0 {
+			_, _ = fmt.Fprintf(out, "✓ Bootstrap matched %d issues\n", bootstrapMatched)
+		}
 		if result.Stats.Pulled > 0 {
 			_, _ = fmt.Fprintf(out, "✓ Pulled %d issues (%d created, %d updated)\n",
 				result.Stats.Pulled, result.Stats.Created, result.Stats.Updated)
@@ -445,6 +521,14 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		}
 		if result.Stats.Conflicts > 0 {
 			_, _ = fmt.Fprintf(out, "→ Resolved %d conflicts\n", result.Stats.Conflicts)
+		}
+		if reconcileResult != nil {
+			_, _ = fmt.Fprintf(out, "✓ Reconciled %d work items", reconcileResult.Checked)
+			if len(reconcileResult.Deleted) > 0 || len(reconcileResult.Denied) > 0 {
+				_, _ = fmt.Fprintf(out, " (%d deleted, %d denied)",
+					len(reconcileResult.Deleted), len(reconcileResult.Denied))
+			}
+			_, _ = fmt.Fprintln(out)
 		}
 	}
 
@@ -456,8 +540,36 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// collectADOWorkItemIDs gathers numeric ADO work item IDs from local issues
+// that have ADO external refs.
+func collectADOWorkItemIDs(ctx context.Context, at *ado.Tracker) []int {
+	allIssues, err := store.SearchIssues(ctx, "", types.IssueFilter{})
+	if err != nil {
+		return nil
+	}
+
+	var ids []int
+	for _, issue := range allIssues {
+		if issue.ExternalRef == nil {
+			continue
+		}
+		ref := *issue.ExternalRef
+		if !at.IsExternalRef(ref) {
+			continue
+		}
+		idStr := at.ExtractIdentifier(ref)
+		if id, err := strconv.Atoi(idStr); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // buildADOPullHooks creates PullHooks for ADO-specific pull behavior.
-func buildADOPullHooks(ctx context.Context) *tracker.PullHooks {
+// When bootstrapMatch is true, incoming ADO items are matched against existing
+// local issues by external_ref, source_system, and heuristic before creating
+// duplicates. When noCreate is true, unmatched items are skipped entirely.
+func buildADOPullHooks(ctx context.Context, at *ado.Tracker, bootstrapMatch, noCreate bool, matchCount *int, warn func(string)) *tracker.PullHooks {
 	prefix := "bd"
 	// YAML config takes precedence — in shared-server mode the DB
 	// may belong to a different project (GH#2469).
@@ -469,7 +581,7 @@ func buildADOPullHooks(ctx context.Context) *tracker.PullHooks {
 		}
 	}
 
-	return &tracker.PullHooks{
+	hooks := &tracker.PullHooks{
 		GenerateID: func(_ context.Context, issue *types.Issue) error {
 			if issue.ID == "" {
 				issue.ID = generateIssueID(prefix)
@@ -477,4 +589,50 @@ func buildADOPullHooks(ctx context.Context) *tracker.PullHooks {
 			return nil
 		},
 	}
+
+	if bootstrapMatch || noCreate {
+		// Pre-load local issues for bootstrap matching.
+		var localIssues []*types.Issue
+		var bm *ado.BootstrapMatcher
+		if bootstrapMatch {
+			localIssues, _ = store.SearchIssues(ctx, "", types.IssueFilter{})
+			bm = ado.NewBootstrapMatcher(at.FieldMapper(), true)
+		}
+
+		hooks.ShouldImport = func(extIssue *tracker.TrackerIssue) bool {
+			// Check if already linked via external ref.
+			ref := at.BuildExternalRef(extIssue)
+			existing, _ := store.GetIssueByExternalRef(ctx, ref)
+			if existing != nil {
+				return true // Already linked; let engine handle update.
+			}
+
+			// Try bootstrap matching against local issues.
+			if bm != nil {
+				result := bm.FindMatch(extIssue, localIssues)
+				if result.Matched {
+					// Link the existing local issue to this ADO item.
+					updates := map[string]interface{}{
+						"external_ref":  ref,
+						"source_system": "ado:" + extIssue.ID,
+					}
+					if err := store.UpdateIssue(ctx, result.BeadsID, updates, actor); err == nil {
+						*matchCount++
+						if warn != nil {
+							warn(fmt.Sprintf("Bootstrap matched ADO #%s → %s (%s)", extIssue.ID, result.BeadsID, result.MatchType))
+						}
+						return true // GetIssueByExternalRef will now find it.
+					}
+				}
+				if result.Candidates > 1 && warn != nil {
+					warn(fmt.Sprintf("Ambiguous bootstrap match for ADO #%s: %d candidates", extIssue.ID, result.Candidates))
+				}
+			}
+
+			// No match found — skip if noCreate, otherwise let engine create.
+			return !noCreate
+		}
+	}
+
+	return hooks
 }
