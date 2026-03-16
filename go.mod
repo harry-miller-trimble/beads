@@ -35,8 +35,6 @@ require (
 	rsc.io/script v0.0.2
 )
 
-require github.com/JohannesKaufmann/dom v0.2.0 // indirect
-
 require (
 	cel.dev/expr v0.25.1 // indirect
 	charm.land/bubbles/v2 v2.0.0 // indirect
@@ -58,6 +56,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.4 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
+	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.30.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.50.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.50.0 // indirect

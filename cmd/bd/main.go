@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	_ "github.com/steveyegge/beads/internal/ado"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
