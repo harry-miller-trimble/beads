@@ -23,7 +23,9 @@ func init() {
 // adoWorkItemPattern matches ADO work item URLs containing /_workitems/edit/{digits}.
 var adoWorkItemPattern = regexp.MustCompile(`/_workitems/edit/(\d+)`)
 
-// Tracker implements tracker.IssueTracker for Azure DevOps.
+// Tracker implements tracker.IssueTracker for Azure DevOps. It is registered
+// under the name "ado" and supports bidirectional sync of work items between
+// ADO and the local beads database.
 type Tracker struct {
 	client  *Client
 	store   storage.Storage
@@ -99,7 +101,9 @@ func (t *Tracker) Validate() error {
 // Close releases any resources held by the tracker.
 func (t *Tracker) Close() error { return nil }
 
-// FetchIssues retrieves work items from Azure DevOps.
+// FetchIssues retrieves work items from Azure DevOps. If opts.Since is set,
+// only work items changed after that time are fetched (incremental sync);
+// otherwise all matching work items in the project are returned (full sync).
 func (t *Tracker) FetchIssues(ctx context.Context, opts tracker.FetchOptions) ([]tracker.TrackerIssue, error) {
 	var items []WorkItem
 	var err error
@@ -174,7 +178,8 @@ func (t *Tracker) UpdateIssue(ctx context.Context, externalID string, issue *typ
 	return &ti, nil
 }
 
-// FieldMapper returns the field mapper for this tracker.
+// FieldMapper returns the bidirectional field mapper used to convert priorities,
+// statuses, types, and issue data between ADO and beads representations.
 func (t *Tracker) FieldMapper() tracker.FieldMapper {
 	return t.mapper
 }
@@ -199,7 +204,9 @@ func (t *Tracker) ExtractIdentifier(ref string) string {
 	return matches[1]
 }
 
-// BuildExternalRef constructs an external URL for a tracker issue.
+// BuildExternalRef constructs an Azure DevOps web URL for the given tracker issue.
+// It prefers the issue's existing URL, then falls back to constructing one from
+// the configured org/project or base URL. Returns an "ado:{id}" URI as a last resort.
 func (t *Tracker) BuildExternalRef(issue *tracker.TrackerIssue) string {
 	if issue.URL != "" {
 		return issue.URL

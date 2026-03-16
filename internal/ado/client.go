@@ -82,7 +82,9 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// NewClient creates a new Azure DevOps client with the given PAT, organization, and project.
+// NewClient creates a new Azure DevOps REST API client for the given organization
+// and project, authenticating with the provided Personal Access Token. The returned
+// client uses DefaultTimeout for HTTP requests and DefaultBaseURL for the API endpoint.
 func NewClient(pat SecretString, org, project string) *Client {
 	return &Client{
 		PAT:     pat,
