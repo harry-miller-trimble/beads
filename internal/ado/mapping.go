@@ -3,6 +3,7 @@ package ado
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/steveyegge/beads/internal/tracker"
@@ -40,6 +41,24 @@ func (m *adoFieldMapper) IssueToBeads(ti *tracker.TrackerIssue) *tracker.IssueCo
 		Labels:      labels,
 	}
 
+	// Restore blocked status from beads:blocked tag (ADO has no blocked state,
+	// so blocked maps to Active + tag on push; reverse it here on pull).
+	if issue.Status == types.StatusInProgress && hasBeadsTag(wi.GetStringField(FieldTags), "beads:blocked") {
+		issue.Status = types.StatusBlocked
+	}
+
+	// Restore original beads priority from tracker metadata when the mapping
+	// is lossy (beads 3 and 4 both map to ADO 4).
+	if ti.Metadata != nil {
+		if bp, ok := ti.Metadata["beads_priority"]; ok {
+			if bpStr, ok := bp.(string); ok {
+				if p, err := strconv.Atoi(bpStr); err == nil && p >= 0 && p <= 4 {
+					issue.Priority = p
+				}
+			}
+		}
+	}
+
 	// Build external ref URL.
 	ref := buildExternalRef(wi)
 	if ref != "" {
@@ -48,6 +67,13 @@ func (m *adoFieldMapper) IssueToBeads(ti *tracker.TrackerIssue) *tracker.IssueCo
 
 	// Preserve ADO-specific metadata for round-trip fidelity.
 	meta := buildMetadata(wi)
+	// Carry forward beads_priority from TrackerIssue metadata so it survives
+	// even when the engine uses conv.Issue.Metadata instead of extIssue.Metadata.
+	if ti.Metadata != nil {
+		if bp, ok := ti.Metadata["beads_priority"]; ok {
+			meta["beads_priority"] = bp
+		}
+	}
 	if len(meta) > 0 {
 		raw, err := json.Marshal(meta)
 		if err == nil {
@@ -74,9 +100,29 @@ func (m *adoFieldMapper) IssueToTracker(issue *types.Issue) map[string]interface
 		}
 	}
 
-	// Join labels as semicolon-separated tag string.
-	if len(issue.Labels) > 0 {
-		fields[FieldTags] = buildTagString(issue.Labels)
+	// Build tags: user labels + internal beads tags for round-trip fidelity.
+	tags := append([]string{}, issue.Labels...)
+	if issue.Status == types.StatusBlocked {
+		tags = append(tags, "beads:blocked")
+	}
+	if len(tags) > 0 {
+		fields[FieldTags] = buildTagString(tags)
+	}
+
+	// Store original beads priority in metadata for lossy mappings
+	// (beads 3 and 4 both map to ADO priority 4).
+	if issue.Priority == 3 || issue.Priority == 4 {
+		var meta map[string]interface{}
+		if len(issue.Metadata) > 0 {
+			_ = json.Unmarshal(issue.Metadata, &meta)
+		}
+		if meta == nil {
+			meta = make(map[string]interface{})
+		}
+		meta["beads_priority"] = strconv.Itoa(issue.Priority)
+		if raw, err := json.Marshal(meta); err == nil {
+			issue.Metadata = json.RawMessage(raw)
+		}
 	}
 
 	// Restore ADO-specific metadata if present.

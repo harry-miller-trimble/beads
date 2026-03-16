@@ -2,6 +2,7 @@ package ado
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/tracker"
@@ -450,8 +451,9 @@ func TestIssueToBeads(t *testing.T) {
 	if issue.Priority != 0 {
 		t.Errorf("Priority = %d, want 0", issue.Priority)
 	}
-	if issue.Status != types.StatusInProgress {
-		t.Errorf("Status = %q, want %q", issue.Status, types.StatusInProgress)
+	// Active + beads:blocked tag → blocked status.
+	if issue.Status != types.StatusBlocked {
+		t.Errorf("Status = %q, want %q", issue.Status, types.StatusBlocked)
 	}
 	if issue.IssueType != types.TypeBug {
 		t.Errorf("IssueType = %q, want %q", issue.IssueType, types.TypeBug)
@@ -749,6 +751,179 @@ func TestRestoreMetadata(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBlockedStatusRoundTrip(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	// Push direction: blocked beads issue → ADO Active + beads:blocked tag.
+	issue := &types.Issue{
+		Title:    "Blocked task",
+		Status:   types.StatusBlocked,
+		Priority: 2,
+		Labels:   []string{"urgent"},
+	}
+	fields := m.IssueToTracker(issue)
+	if fields[FieldState] != "Active" {
+		t.Errorf("push: State = %v, want %q", fields[FieldState], "Active")
+	}
+	tagStr, ok := fields[FieldTags].(string)
+	if !ok {
+		t.Fatal("push: Tags field missing")
+	}
+	if !hasBeadsTag(tagStr, "beads:blocked") {
+		t.Errorf("push: Tags = %q, want beads:blocked present", tagStr)
+	}
+
+	// Pull direction: ADO Active + beads:blocked → beads blocked.
+	wi := &WorkItem{
+		ID: 99,
+		Fields: map[string]interface{}{
+			FieldTitle:        "Blocked task",
+			FieldState:        "Active",
+			FieldPriority:     float64(3),
+			FieldWorkItemType: "Task",
+			FieldTags:         "urgent; beads:blocked",
+		},
+	}
+	ti := &tracker.TrackerIssue{ID: "99", Raw: wi}
+	conv := m.IssueToBeads(ti)
+	if conv == nil {
+		t.Fatal("pull: IssueToBeads returned nil")
+	}
+	if conv.Issue.Status != types.StatusBlocked {
+		t.Errorf("pull: Status = %q, want %q", conv.Issue.Status, types.StatusBlocked)
+	}
+	// beads:blocked should be filtered from user-visible labels.
+	for _, l := range conv.Issue.Labels {
+		if l == "beads:blocked" {
+			t.Error("pull: beads:blocked should not appear in Labels")
+		}
+	}
+}
+
+func TestBlockedStatusPush_NoLabels(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	// Blocked issue with no labels should still get beads:blocked tag.
+	issue := &types.Issue{
+		Title:    "Blocked no labels",
+		Status:   types.StatusBlocked,
+		Priority: 2,
+	}
+	fields := m.IssueToTracker(issue)
+	tagStr, ok := fields[FieldTags].(string)
+	if !ok || !hasBeadsTag(tagStr, "beads:blocked") {
+		t.Errorf("Tags = %v, want beads:blocked present", fields[FieldTags])
+	}
+}
+
+func TestActiveWithoutBlockedTag_StaysInProgress(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	wi := &WorkItem{
+		ID: 100,
+		Fields: map[string]interface{}{
+			FieldTitle:        "Active task",
+			FieldState:        "Active",
+			FieldPriority:     float64(2),
+			FieldWorkItemType: "Task",
+			FieldTags:         "frontend",
+		},
+	}
+	ti := &tracker.TrackerIssue{ID: "100", Raw: wi}
+	conv := m.IssueToBeads(ti)
+	if conv.Issue.Status != types.StatusInProgress {
+		t.Errorf("Status = %q, want %q", conv.Issue.Status, types.StatusInProgress)
+	}
+}
+
+func TestPriorityRoundTrip(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	tests := []struct {
+		name          string
+		beadsPriority int
+		wantADO       int
+		wantRoundTrip int
+	}{
+		{"priority 3 round-trips", 3, 4, 3},
+		{"priority 4 round-trips", 4, 4, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Push: beads → ADO.
+			issue := &types.Issue{
+				Title:    "Priority test",
+				Priority: tt.beadsPriority,
+				Status:   types.StatusOpen,
+			}
+			fields := m.IssueToTracker(issue)
+			if fields[FieldPriority] != tt.wantADO {
+				t.Fatalf("push: ADO priority = %v, want %d", fields[FieldPriority], tt.wantADO)
+			}
+
+			// Verify beads_priority stored in metadata.
+			var meta map[string]interface{}
+			if err := json.Unmarshal(issue.Metadata, &meta); err != nil {
+				t.Fatalf("push: failed to unmarshal metadata: %v", err)
+			}
+			wantBP := json.Number(fmt.Sprintf("%d", tt.beadsPriority))
+			gotBP, ok := meta["beads_priority"].(string)
+			if !ok {
+				t.Fatalf("push: beads_priority not found in metadata, got %v", meta["beads_priority"])
+			}
+			if gotBP != wantBP.String() {
+				t.Fatalf("push: beads_priority = %q, want %q", gotBP, wantBP)
+			}
+
+			// Pull: ADO → beads with beads_priority in TrackerIssue metadata.
+			wi := &WorkItem{
+				ID: 50,
+				Fields: map[string]interface{}{
+					FieldTitle:        "Priority test",
+					FieldState:        "New",
+					FieldPriority:     float64(tt.wantADO),
+					FieldWorkItemType: "Task",
+				},
+			}
+			ti := &tracker.TrackerIssue{
+				ID:  "50",
+				Raw: wi,
+				Metadata: map[string]interface{}{
+					"beads_priority": fmt.Sprintf("%d", tt.beadsPriority),
+				},
+			}
+			conv := m.IssueToBeads(ti)
+			if conv == nil {
+				t.Fatal("pull: IssueToBeads returned nil")
+			}
+			if conv.Issue.Priority != tt.wantRoundTrip {
+				t.Errorf("pull: Priority = %d, want %d", conv.Issue.Priority, tt.wantRoundTrip)
+			}
+		})
+	}
+}
+
+func TestPriorityNoMetadata_DefaultsTo3(t *testing.T) {
+	m := NewFieldMapper(nil, nil)
+
+	// ADO priority 4 without beads_priority metadata → defaults to beads 3.
+	wi := &WorkItem{
+		ID: 51,
+		Fields: map[string]interface{}{
+			FieldTitle:        "No metadata",
+			FieldState:        "New",
+			FieldPriority:     float64(4),
+			FieldWorkItemType: "Task",
+		},
+	}
+	ti := &tracker.TrackerIssue{ID: "51", Raw: wi}
+	conv := m.IssueToBeads(ti)
+	if conv.Issue.Priority != 3 {
+		t.Errorf("Priority = %d, want 3", conv.Issue.Priority)
 	}
 }
 
