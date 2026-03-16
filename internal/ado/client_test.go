@@ -268,7 +268,7 @@ func TestClient_FetchWorkItemsSince(t *testing.T) {
 	})
 
 	since := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	items, err := client.FetchWorkItemsSince(context.Background(), since)
+	items, err := client.FetchWorkItemsSince(context.Background(), since, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -519,6 +519,358 @@ func TestClient_AddWorkItemLink(t *testing.T) {
 	err := client.AddWorkItemLink(context.Background(), 10, "https://example.com/workitems/20", RelChild)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPullFilters_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters PullFilters
+		wantErr bool
+	}{
+		{
+			name:    "empty filters",
+			filters: PullFilters{},
+			wantErr: false,
+		},
+		{
+			name:    "valid area path with backslash",
+			filters: PullFilters{AreaPath: `MyProject\Backend`},
+			wantErr: false,
+		},
+		{
+			name:    "valid area path with spaces",
+			filters: PullFilters{AreaPath: "My Project/Sub Area"},
+			wantErr: false,
+		},
+		{
+			name:    "invalid area path with semicolon",
+			filters: PullFilters{AreaPath: "My;Path"},
+			wantErr: true,
+		},
+		{
+			name:    "valid state",
+			filters: PullFilters{States: []string{"Active"}},
+			wantErr: false,
+		},
+		{
+			name:    "invalid state with special chars",
+			filters: PullFilters{States: []string{"Active; DROP TABLE"}},
+			wantErr: true,
+		},
+		{
+			name:    "valid work item types",
+			filters: PullFilters{WorkItemTypes: []string{"Bug", "Task"}},
+			wantErr: false,
+		},
+		{
+			name: "all filters set and valid",
+			filters: PullFilters{
+				AreaPath:      `MyProject\Backend`,
+				IterationPath: `MyProject\Sprint 1`,
+				WorkItemTypes: []string{"Bug", "User Story"},
+				States:        []string{"Active", "New"},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid iteration path",
+			filters: PullFilters{IterationPath: "Bad;Path"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid work item type",
+			filters: PullFilters{WorkItemTypes: []string{"Bug", "Bad;Type"}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.filters.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateOrg(t *testing.T) {
+	tests := []struct {
+		name    string
+		org     string
+		wantErr bool
+	}{
+		{name: "simple org", org: "myorg", wantErr: false},
+		{name: "org with hyphens and dots", org: "my-org.name", wantErr: false},
+		{name: "org with spaces", org: "my org", wantErr: true},
+		{name: "empty org", org: "", wantErr: true},
+		{name: "org with semicolon", org: "my;org", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateOrg(tt.org)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateOrg(%q) error = %v, wantErr %v", tt.org, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateProject(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		wantErr bool
+	}{
+		{name: "simple project", project: "MyProject", wantErr: false},
+		{name: "project with spaces", project: "My Project", wantErr: false},
+		{name: "project with apostrophe", project: "Project's Name", wantErr: false},
+		{name: "empty project", project: "", wantErr: true},
+		{name: "project with semicolon", project: "My;Project", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateProject(tt.project)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateProject(%q) error = %v, wantErr %v", tt.project, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestBuildPullWIQL(t *testing.T) {
+	c := NewClient(NewSecretString("pat"), "myorg", "testproject")
+	since := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		since    *time.Time
+		filters  *PullFilters
+		contains []string
+		absent   []string
+	}{
+		{
+			name:    "no filters no since",
+			since:   nil,
+			filters: nil,
+			contains: []string{
+				"[System.TeamProject] = 'testproject'",
+				"[System.IsDeleted] = false",
+			},
+			absent: []string{"ChangedDate >=", "AreaPath", "WorkItemType", "State"},
+		},
+		{
+			name:    "with since",
+			since:   &since,
+			filters: nil,
+			contains: []string{
+				"[System.ChangedDate] >= '2024-06-01T00:00:00Z'",
+			},
+		},
+		{
+			name:    "with area path",
+			since:   nil,
+			filters: &PullFilters{AreaPath: `MyProject\Backend`},
+			contains: []string{
+				`[System.AreaPath] UNDER 'MyProject\\Backend'`,
+			},
+		},
+		{
+			name:    "with work item types",
+			since:   nil,
+			filters: &PullFilters{WorkItemTypes: []string{"Bug", "Task"}},
+			contains: []string{
+				"[System.WorkItemType] IN ('Bug', 'Task')",
+			},
+		},
+		{
+			name:    "with states",
+			since:   nil,
+			filters: &PullFilters{States: []string{"Active", "New"}},
+			contains: []string{
+				"[System.State] IN ('Active', 'New')",
+			},
+		},
+		{
+			name:  "all filters",
+			since: &since,
+			filters: &PullFilters{
+				AreaPath:      `MyProject\Backend`,
+				IterationPath: `MyProject\Sprint 1`,
+				WorkItemTypes: []string{"Bug"},
+				States:        []string{"Active"},
+			},
+			contains: []string{
+				"[System.TeamProject] = 'testproject'",
+				"[System.IsDeleted] = false",
+				"[System.ChangedDate] >= '2024-06-01T00:00:00Z'",
+				`[System.AreaPath] UNDER 'MyProject\\Backend'`,
+				`[System.IterationPath] UNDER 'MyProject\\Sprint 1'`,
+				"[System.WorkItemType] IN ('Bug')",
+				"[System.State] IN ('Active')",
+			},
+		},
+		{
+			name:    "WIQL injection escaped",
+			since:   nil,
+			filters: &PullFilters{AreaPath: "Path' OR 1=1--"},
+			contains: []string{
+				"UNDER 'Path'' OR 1=1--'",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := c.buildPullWIQL(tt.since, tt.filters)
+			for _, s := range tt.contains {
+				if !strings.Contains(got, s) {
+					t.Errorf("buildPullWIQL() missing %q in:\n%s", s, got)
+				}
+			}
+			for _, s := range tt.absent {
+				if strings.Contains(got, s) {
+					t.Errorf("buildPullWIQL() should not contain %q in:\n%s", s, got)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchWorkItemsSince_WithFilters(t *testing.T) {
+	step := 0
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/wit/wiql"):
+			if r.Method != http.MethodPost {
+				t.Errorf("WIQL: expected POST, got %s", r.Method)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var req WIQLRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("failed to parse WIQL body: %v", err)
+			}
+			if !strings.Contains(req.Query, "[System.AreaPath] UNDER") {
+				t.Error("WIQL query should contain area path filter")
+			}
+			if !strings.Contains(req.Query, "[System.WorkItemType] IN") {
+				t.Error("WIQL query should contain work item type filter")
+			}
+			if !strings.Contains(req.Query, "[System.State] IN") {
+				t.Error("WIQL query should contain state filter")
+			}
+			resp := `{"workItems":[{"id":5,"url":"https://example.com/5"}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+			step++
+
+		case strings.Contains(r.URL.Path, "/wit/workitems"):
+			if step == 0 {
+				t.Error("batch GET called before WIQL")
+			}
+			resp := `{"count":1,"value":[{"id":5,"rev":1,"fields":{"System.Title":"Filtered Item"}}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	since := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	filters := &PullFilters{
+		AreaPath:      `MyProject\Backend`,
+		WorkItemTypes: []string{"Bug", "Task"},
+		States:        []string{"Active"},
+	}
+	items, err := client.FetchWorkItemsSince(context.Background(), since, filters)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].GetStringField("System.Title") != "Filtered Item" {
+		t.Errorf("unexpected title: %s", items[0].GetStringField("System.Title"))
+	}
+}
+
+func TestFetchWorkItemsSince_InvalidFilters(t *testing.T) {
+	requestMade := false
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestMade = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	since := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	filters := &PullFilters{
+		AreaPath: "Bad;Path",
+	}
+	_, err := client.FetchWorkItemsSince(context.Background(), since, filters)
+	if err == nil {
+		t.Fatal("expected error for invalid filters")
+	}
+	if !strings.Contains(err.Error(), "invalid pull filters") {
+		t.Errorf("error should mention invalid pull filters: %v", err)
+	}
+	if requestMade {
+		t.Error("no HTTP request should be made for invalid filters")
+	}
+}
+
+func TestFetchAllWorkItems(t *testing.T) {
+	step := 0
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/wit/wiql"):
+			body, _ := io.ReadAll(r.Body)
+			var req WIQLRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("failed to parse WIQL body: %v", err)
+			}
+			if strings.Contains(req.Query, "ChangedDate >=") {
+				t.Error("FetchAllWorkItems should not include ChangedDate filter")
+			}
+			if !strings.Contains(req.Query, "[System.IsDeleted] = false") {
+				t.Error("WIQL query should include IsDeleted filter")
+			}
+			resp := `{"workItems":[{"id":1,"url":"u"},{"id":2,"url":"u"}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+			step++
+
+		case strings.Contains(r.URL.Path, "/wit/workitems"):
+			resp := `{"count":2,"value":[{"id":1,"rev":1,"fields":{}},{"id":2,"rev":1,"fields":{}}]}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(resp))
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	items, err := client.FetchAllWorkItems(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+}
+
+func TestFetchAllWorkItems_InvalidFilters(t *testing.T) {
+	requestMade := false
+	client, _ := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestMade = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	_, err := client.FetchAllWorkItems(context.Background(), &PullFilters{States: []string{"Bad;State"}})
+	if err == nil {
+		t.Fatal("expected error for invalid filters")
+	}
+	if requestMade {
+		t.Error("no HTTP request should be made for invalid filters")
 	}
 }
 

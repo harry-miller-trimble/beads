@@ -9,11 +9,69 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// PullFilters configures which work items to pull from ADO.
+// All filter values are validated before use in WIQL queries.
+type PullFilters struct {
+	AreaPath      string   // Filter to area path (uses UNDER for hierarchy), validated
+	IterationPath string   // Filter to iteration path (uses UNDER for hierarchy), validated
+	WorkItemTypes []string // Filter to specific work item types, validated
+	States        []string // Filter to specific states, validated
+}
+
+var (
+	// areaPathPattern validates ADO area/iteration path values.
+	areaPathPattern = regexp.MustCompile(`^[a-zA-Z0-9 ._\\/-]+$`)
+	// statePattern validates ADO state names.
+	statePattern = regexp.MustCompile(`^[a-zA-Z0-9 _]+$`)
+	// orgPattern validates ADO organization names.
+	orgPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+	// projectPattern validates ADO project names (allows spaces, quotes, etc.).
+	projectPattern = regexp.MustCompile(`^[a-zA-Z0-9 ._'-]+$`)
+)
+
+// Validate checks all filter values against their allowlist patterns.
+func (f *PullFilters) Validate() error {
+	if f.AreaPath != "" && !areaPathPattern.MatchString(f.AreaPath) {
+		return fmt.Errorf("invalid area path: %q (must match %s)", f.AreaPath, areaPathPattern.String())
+	}
+	if f.IterationPath != "" && !areaPathPattern.MatchString(f.IterationPath) {
+		return fmt.Errorf("invalid iteration path: %q", f.IterationPath)
+	}
+	for _, t := range f.WorkItemTypes {
+		if !areaPathPattern.MatchString(t) {
+			return fmt.Errorf("invalid work item type: %q", t)
+		}
+	}
+	for _, s := range f.States {
+		if !statePattern.MatchString(s) {
+			return fmt.Errorf("invalid state filter: %q", s)
+		}
+	}
+	return nil
+}
+
+// ValidateOrg checks the organization name against the allowlist pattern.
+func ValidateOrg(org string) error {
+	if !orgPattern.MatchString(org) {
+		return fmt.Errorf("invalid organization name: must match %s", orgPattern.String())
+	}
+	return nil
+}
+
+// ValidateProject checks the project name against the allowlist pattern.
+func ValidateProject(project string) error {
+	if !projectPattern.MatchString(project) {
+		return fmt.Errorf("invalid project name: must match %s", projectPattern.String())
+	}
+	return nil
+}
 
 // Client communicates with the Azure DevOps REST API.
 type Client struct {
@@ -237,14 +295,56 @@ func (c *Client) FetchWorkItems(ctx context.Context, ids []int) ([]WorkItem, err
 	return all, nil
 }
 
-// FetchWorkItemsSince retrieves work items changed since the given time using WIQL.
-func (c *Client) FetchWorkItemsSince(ctx context.Context, since time.Time) ([]WorkItem, error) {
-	sinceStr := since.UTC().Format("2006-01-02T15:04:05Z")
-	query := fmt.Sprintf(
-		"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '%s' AND [System.ChangedDate] >= '%s' AND [System.IsDeleted] = false ORDER BY [System.ChangedDate] ASC",
-		escapeWIQL(c.Project), sinceStr,
-	)
+// buildPullWIQL constructs a safe WIQL query from validated filter fields.
+// All values are escaped via escapeWIQL before interpolation.
+func (c *Client) buildPullWIQL(since *time.Time, filters *PullFilters) string {
+	clauses := []string{
+		fmt.Sprintf("[System.TeamProject] = '%s'", escapeWIQL(c.Project)),
+		"[System.IsDeleted] = false",
+	}
+	if since != nil {
+		clauses = append(clauses, fmt.Sprintf(
+			"[System.ChangedDate] >= '%s'",
+			since.UTC().Format("2006-01-02T15:04:05Z"),
+		))
+	}
+	if filters != nil {
+		if filters.AreaPath != "" {
+			clauses = append(clauses, fmt.Sprintf(
+				"[System.AreaPath] UNDER '%s'", escapeWIQL(filters.AreaPath),
+			))
+		}
+		if filters.IterationPath != "" {
+			clauses = append(clauses, fmt.Sprintf(
+				"[System.IterationPath] UNDER '%s'", escapeWIQL(filters.IterationPath),
+			))
+		}
+		if len(filters.WorkItemTypes) > 0 {
+			quoted := make([]string, len(filters.WorkItemTypes))
+			for i, t := range filters.WorkItemTypes {
+				quoted[i] = "'" + escapeWIQL(t) + "'"
+			}
+			clauses = append(clauses, fmt.Sprintf(
+				"[System.WorkItemType] IN (%s)", strings.Join(quoted, ", "),
+			))
+		}
+		if len(filters.States) > 0 {
+			quoted := make([]string, len(filters.States))
+			for i, s := range filters.States {
+				quoted[i] = "'" + escapeWIQL(s) + "'"
+			}
+			clauses = append(clauses, fmt.Sprintf(
+				"[System.State] IN (%s)", strings.Join(quoted, ", "),
+			))
+		}
+	}
+	return "SELECT [System.Id] FROM WorkItems WHERE " +
+		strings.Join(clauses, " AND ") +
+		" ORDER BY [System.ChangedDate] ASC"
+}
 
+// fetchWorkItemsByWIQL executes the given WIQL query and fetches full work items.
+func (c *Client) fetchWorkItemsByWIQL(ctx context.Context, query string) ([]WorkItem, error) {
 	urlStr := addAPIVersion(c.apiBase() + "/wit/wiql")
 	reqBody := WIQLRequest{Query: query}
 	respBody, _, err := c.doRequest(ctx, http.MethodPost, urlStr, "application/json", reqBody)
@@ -267,6 +367,30 @@ func (c *Client) FetchWorkItemsSince(ctx context.Context, since time.Time) ([]Wo
 	}
 
 	return c.FetchWorkItems(ctx, ids)
+}
+
+// FetchWorkItemsSince retrieves work items changed since the given time using WIQL.
+// Pass nil for filters to fetch all work item types and states.
+func (c *Client) FetchWorkItemsSince(ctx context.Context, since time.Time, filters *PullFilters) ([]WorkItem, error) {
+	if filters != nil {
+		if err := filters.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid pull filters: %w", err)
+		}
+	}
+	query := c.buildPullWIQL(&since, filters)
+	return c.fetchWorkItemsByWIQL(ctx, query)
+}
+
+// FetchAllWorkItems retrieves all work items matching the given filters.
+// Used for initial sync or reconciliation.
+func (c *Client) FetchAllWorkItems(ctx context.Context, filters *PullFilters) ([]WorkItem, error) {
+	if filters != nil {
+		if err := filters.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid pull filters: %w", err)
+		}
+	}
+	query := c.buildPullWIQL(nil, filters)
+	return c.fetchWorkItemsByWIQL(ctx, query)
 }
 
 // CreateWorkItem creates a new work item of the given type with the specified fields.
