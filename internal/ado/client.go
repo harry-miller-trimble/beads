@@ -107,16 +107,32 @@ func (c *Client) WithHTTPClient(httpClient *http.Client) *Client {
 	}
 }
 
+// validateURLScheme rejects non-HTTPS URLs unless the host is localhost or 127.0.0.1.
+func validateURLScheme(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+		return fmt.Errorf("HTTPS required for ADO connections (got %s); use https:// or localhost for testing", rawURL)
+	}
+	return nil
+}
+
 // WithBaseURL returns a copy of the client configured to use a custom API base URL.
 // This is useful for on-prem Azure DevOps Server or testing with mock servers.
-func (c *Client) WithBaseURL(baseURL string) *Client {
+// Returns an error if the URL uses plain HTTP for non-localhost hosts.
+func (c *Client) WithBaseURL(baseURL string) (*Client, error) {
+	if err := validateURLScheme(baseURL); err != nil {
+		return nil, err
+	}
 	return &Client{
 		PAT:        c.PAT,
 		BaseURL:    strings.TrimSuffix(baseURL, "/"),
 		Org:        c.Org,
 		Project:    c.Project,
 		HTTPClient: c.HTTPClient,
-	}
+	}, nil
 }
 
 // apiBase returns the project-scoped _apis URL prefix.
@@ -137,6 +153,20 @@ func (c *Client) orgBase() string {
 
 // doRequest performs an HTTP request with authentication and retry logic.
 // contentType controls the Content-Type header; pass empty string for GET requests.
+// isIdempotent reports whether the given request is safe to retry.
+// GET requests are always safe. POST to the WIQL endpoint is a read-only
+// query and is also safe. Mutations (POST/PATCH to other endpoints) are
+// NOT safe to retry because the server may have already applied them.
+func isIdempotent(method, urlStr string) bool {
+	if method == http.MethodGet {
+		return true
+	}
+	if method == http.MethodPost && strings.Contains(urlStr, "/wit/wiql") {
+		return true
+	}
+	return false
+}
+
 func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType string, body interface{}) ([]byte, error) {
 	var bodyBytes []byte
 	if body != nil {
@@ -148,9 +178,15 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 	}
 
 	cred := base64.StdEncoding.EncodeToString([]byte(":" + c.PAT.Expose()))
+	canRetry := isIdempotent(method, urlStr)
+
+	maxAttempts := 0
+	if canRetry {
+		maxAttempts = MaxRetries
+	}
 
 	var lastErr error
-	for attempt := 0; attempt <= MaxRetries; attempt++ {
+	for attempt := 0; attempt <= maxAttempts; attempt++ {
 		var reqBody io.Reader
 		if bodyBytes != nil {
 			reqBody = bytes.NewReader(bodyBytes)
@@ -168,8 +204,8 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 
 		resp, err := c.HTTPClient.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed (attempt %d/%d): %w", attempt+1, MaxRetries+1, err)
-			if attempt < MaxRetries {
+			lastErr = fmt.Errorf("request failed (attempt %d/%d): %w", attempt+1, maxAttempts+1, err)
+			if attempt < maxAttempts {
 				delay := RetryDelay * time.Duration(1<<uint(attempt))
 				select {
 				case <-ctx.Done():
@@ -183,7 +219,7 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseSize))
 		_ = resp.Body.Close()
 		if err != nil {
-			lastErr = fmt.Errorf("failed to read response (attempt %d/%d): %w", attempt+1, MaxRetries+1, err)
+			lastErr = fmt.Errorf("failed to read response (attempt %d/%d): %w", attempt+1, maxAttempts+1, err)
 			continue
 		}
 
@@ -197,18 +233,18 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 			return nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
 		}
 
-		// Retry on 429 and 5xx server errors.
+		// Retry on 429 and 5xx server errors (idempotent requests only).
 		retriable := resp.StatusCode == http.StatusTooManyRequests ||
 			resp.StatusCode >= 500
 
-		if retriable && attempt < MaxRetries {
+		if retriable && attempt < maxAttempts {
 			delay := RetryDelay * time.Duration(1<<uint(attempt))
 			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
 				if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
 					delay = time.Duration(seconds) * time.Second
 				}
 			}
-			lastErr = fmt.Errorf("transient error %d (attempt %d/%d)", resp.StatusCode, attempt+1, MaxRetries+1)
+			lastErr = fmt.Errorf("transient error %d (attempt %d/%d)", resp.StatusCode, attempt+1, maxAttempts+1)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -220,7 +256,7 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr, contentType stri
 		return nil, fmt.Errorf("API error: %s (status %d)", string(respBody), resp.StatusCode)
 	}
 
-	return nil, fmt.Errorf("max retries (%d) exceeded: %w", MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("max retries (%d) exceeded: %w", maxAttempts+1, lastErr)
 }
 
 // addAPIVersion appends the api-version query parameter to a URL string.

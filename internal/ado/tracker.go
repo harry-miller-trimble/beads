@@ -65,6 +65,15 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 		return fmt.Errorf("Azure DevOps project not configured (set ado.project or AZURE_DEVOPS_PROJECT)")
 	}
 
+	if t.org != "" {
+		if err := ValidateOrg(t.org); err != nil {
+			return fmt.Errorf("invalid Azure DevOps organization: %w", err)
+		}
+	}
+	if err := ValidateProject(t.project); err != nil {
+		return fmt.Errorf("invalid Azure DevOps project: %w", err)
+	}
+
 	// Read custom state/type mappings from config.
 	stateMap := t.readMappingConfig(ctx, "ado.state_map.",
 		[]string{"open", "in_progress", "blocked", "deferred", "closed"})
@@ -75,7 +84,11 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 
 	t.client = NewClient(NewSecretString(pat), t.org, t.project)
 	if customURL != "" {
-		t.client = t.client.WithBaseURL(customURL)
+		var err error
+		t.client, err = t.client.WithBaseURL(customURL)
+		if err != nil {
+			return fmt.Errorf("invalid Azure DevOps URL: %w", err)
+		}
 		t.baseURL = strings.TrimSuffix(customURL, "/")
 	} else if t.org != "" {
 		t.baseURL = DefaultBaseURL + "/" + t.org
@@ -131,6 +144,9 @@ func (t *Tracker) FetchIssue(ctx context.Context, identifier string) (*tracker.T
 	if err != nil {
 		return nil, fmt.Errorf("invalid ADO work item ID %q: %w", identifier, err)
 	}
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid ADO work item ID: must be positive, got %d", id)
+	}
 
 	items, err := t.client.FetchWorkItems(ctx, []int{id})
 	if err != nil {
@@ -166,6 +182,9 @@ func (t *Tracker) UpdateIssue(ctx context.Context, externalID string, issue *typ
 	id, err := strconv.Atoi(externalID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ADO work item ID %q: %w", externalID, err)
+	}
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid ADO work item ID: must be positive, got %d", id)
 	}
 
 	fields := t.mapper.IssueToTracker(issue)

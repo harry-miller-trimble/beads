@@ -19,9 +19,12 @@ func setupTestServer(t *testing.T, handler http.HandlerFunc) (*Client, *httptest
 	t.Helper()
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
-	client := NewClient(NewSecretString("test-pat"), "testorg", "testproject").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("test-pat"), "testorg", "testproject").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL(%s) error: %v", ts.URL, err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	return client, ts
 }
 
@@ -132,7 +135,11 @@ func TestClient_apiBase(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewClient(NewSecretString("pat"), tt.org, tt.project)
 			if tt.baseURL != "" {
-				c = c.WithBaseURL(tt.baseURL)
+				var err error
+				c, err = c.WithBaseURL(tt.baseURL)
+				if err != nil {
+					t.Fatalf("WithBaseURL(%q) error: %v", tt.baseURL, err)
+				}
 			}
 			got := c.apiBase()
 			if got != tt.want {
@@ -1096,7 +1103,11 @@ func TestClient_orgBase(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewClient(NewSecretString("pat"), tt.org, "proj")
 			if tt.baseURL != "" {
-				c = c.WithBaseURL(tt.baseURL)
+				var err error
+				c, err = c.WithBaseURL(tt.baseURL)
+				if err != nil {
+					t.Fatalf("WithBaseURL(%q) error: %v", tt.baseURL, err)
+				}
 			}
 			got := c.orgBase()
 			if got != tt.want {
@@ -1411,5 +1422,65 @@ func TestClient_FetchWorkItems_InvalidValueJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to parse work items value") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateURLScheme(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{name: "https allowed", url: "https://dev.azure.com/org", wantErr: false},
+		{name: "https on-prem", url: "https://tfs.example.com/collection", wantErr: false},
+		{name: "http localhost", url: "http://localhost:8080/api", wantErr: false},
+		{name: "http 127.0.0.1", url: "http://127.0.0.1:9090", wantErr: false},
+		{name: "http remote rejected", url: "http://ado.example.com/org", wantErr: true},
+		{name: "http IP rejected", url: "http://10.0.0.1:8080/api", wantErr: true},
+		{name: "unparseable URL", url: "://bad", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateURLScheme(tt.url)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateURLScheme(%q) = nil, want error", tt.url)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateURLScheme(%q) = %v, want nil", tt.url, err)
+			}
+		})
+	}
+}
+
+func TestWithBaseURL_RejectsHTTP(t *testing.T) {
+	c := NewClient(NewSecretString("pat"), "org", "proj")
+	_, err := c.WithBaseURL("http://ado.example.com/collection")
+	if err == nil {
+		t.Fatal("WithBaseURL should reject http:// for non-localhost")
+	}
+	if !strings.Contains(err.Error(), "HTTPS required") {
+		t.Errorf("error = %q, want mention of HTTPS required", err.Error())
+	}
+}
+
+func TestWithBaseURL_AllowsHTTPS(t *testing.T) {
+	c := NewClient(NewSecretString("pat"), "org", "proj")
+	got, err := c.WithBaseURL("https://tfs.example.com/collection")
+	if err != nil {
+		t.Fatalf("WithBaseURL should allow https://: %v", err)
+	}
+	if got.BaseURL != "https://tfs.example.com/collection" {
+		t.Errorf("BaseURL = %q, want %q", got.BaseURL, "https://tfs.example.com/collection")
+	}
+}
+
+func TestWithBaseURL_AllowsLocalhost(t *testing.T) {
+	c := NewClient(NewSecretString("pat"), "org", "proj")
+	got, err := c.WithBaseURL("http://localhost:8080")
+	if err != nil {
+		t.Fatalf("WithBaseURL should allow http://localhost: %v", err)
+	}
+	if got.BaseURL != "http://localhost:8080" {
+		t.Errorf("BaseURL = %q, want %q", got.BaseURL, "http://localhost:8080")
 	}
 }

@@ -355,9 +355,12 @@ func TestPushLinks_AddMissing(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	desired := []tracker.DependencyInfo{
@@ -411,9 +414,12 @@ func TestPushLinks_RemoveStale(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	currentRelations := []WorkItemRelation{
@@ -463,9 +469,12 @@ func TestPushLinks_Idempotent(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	currentRelations := []WorkItemRelation{
@@ -510,10 +519,12 @@ func TestPushLinks_PartialFailure(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(&http.Client{})
-	client = client.WithBaseURL(ts.URL).WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	desired := []tracker.DependencyInfo{
@@ -672,9 +683,12 @@ func TestPushLinks_InvalidExternalID(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	desired := []tracker.DependencyInfo{
@@ -714,9 +728,12 @@ func TestPushLinks_RemoveFailure(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("pat"), "org", "proj").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("pat"), "org", "proj").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	resolver := NewLinkResolver(client)
 
 	currentRelations := []WorkItemRelation{

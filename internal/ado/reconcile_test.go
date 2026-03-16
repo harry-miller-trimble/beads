@@ -90,9 +90,12 @@ func setupReconcileServer(t *testing.T, items map[int]itemStatus) (*Client, *htt
 	}))
 	t.Cleanup(ts.Close)
 
-	client := NewClient(NewSecretString("test-pat"), "testorg", "testproject").
-		WithBaseURL(ts.URL).
-		WithHTTPClient(ts.Client())
+	client, err := NewClient(NewSecretString("test-pat"), "testorg", "testproject").
+		WithBaseURL(ts.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL error: %v", err)
+	}
+	client = client.WithHTTPClient(ts.Client())
 	return client, ts
 }
 

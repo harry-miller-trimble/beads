@@ -637,7 +637,10 @@ func newTestTracker(t *testing.T, handler http.Handler) (*Tracker, *httptest.Ser
 	t.Cleanup(server.Close)
 
 	client := NewClient(NewSecretString("test-pat"), "testorg", "testproject")
-	client = client.WithBaseURL(server.URL)
+	client, err := client.WithBaseURL(server.URL)
+	if err != nil {
+		t.Fatalf("WithBaseURL(%s) error: %v", server.URL, err)
+	}
 
 	return &Tracker{
 		client:  client,
@@ -1113,4 +1116,108 @@ func containsSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestTracker_FetchIssue_ZeroID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.FetchIssue(context.Background(), "0")
+	if err == nil {
+		t.Fatal("FetchIssue(0) should return error")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("error = %q, want mention of 'must be positive'", err.Error())
+	}
+}
+
+func TestTracker_FetchIssue_NegativeID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.FetchIssue(context.Background(), "-5")
+	if err == nil {
+		t.Fatal("FetchIssue(-5) should return error")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("error = %q, want mention of 'must be positive'", err.Error())
+	}
+}
+
+func TestTracker_UpdateIssue_ZeroID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.UpdateIssue(context.Background(), "0", &types.Issue{Title: "x"})
+	if err == nil {
+		t.Fatal("UpdateIssue(0) should return error")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("error = %q, want mention of 'must be positive'", err.Error())
+	}
+}
+
+func TestTracker_UpdateIssue_NegativeID(t *testing.T) {
+	tr := &Tracker{
+		client: NewClient(NewSecretString("pat"), "org", "proj"),
+		mapper: NewFieldMapper(nil, nil),
+	}
+	_, err := tr.UpdateIssue(context.Background(), "-1", &types.Issue{Title: "x"})
+	if err == nil {
+		t.Fatal("UpdateIssue(-1) should return error")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("error = %q, want mention of 'must be positive'", err.Error())
+	}
+}
+
+func TestTracker_InitValidatesOrg(t *testing.T) {
+	tr := &Tracker{}
+	store := newMockStore(map[string]string{
+		"ado.pat":     "some-pat",
+		"ado.org":     "bad org!@#",
+		"ado.project": "myproject",
+	})
+	err := tr.Init(context.Background(), store)
+	if err == nil {
+		t.Fatal("Init() should reject invalid org name")
+	}
+	if !strings.Contains(err.Error(), "invalid Azure DevOps organization") {
+		t.Errorf("error = %q, want mention of invalid organization", err.Error())
+	}
+}
+
+func TestTracker_InitValidatesProject(t *testing.T) {
+	tr := &Tracker{}
+	store := newMockStore(map[string]string{
+		"ado.pat":     "some-pat",
+		"ado.org":     "myorg",
+		"ado.project": "bad<project>",
+	})
+	err := tr.Init(context.Background(), store)
+	if err == nil {
+		t.Fatal("Init() should reject invalid project name")
+	}
+	if !strings.Contains(err.Error(), "invalid Azure DevOps project") {
+		t.Errorf("error = %q, want mention of invalid project", err.Error())
+	}
+}
+
+func TestTracker_InitRejectsHTTPURL(t *testing.T) {
+	tr := &Tracker{}
+	store := newMockStore(map[string]string{
+		"ado.pat":     "some-pat",
+		"ado.project": "myproject",
+		"ado.url":     "http://ado.example.com/collection",
+	})
+	err := tr.Init(context.Background(), store)
+	if err == nil {
+		t.Fatal("Init() should reject http:// URL for non-localhost")
+	}
+	if !strings.Contains(err.Error(), "HTTPS required") {
+		t.Errorf("error = %q, want mention of HTTPS required", err.Error())
+	}
 }
