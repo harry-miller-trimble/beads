@@ -2,6 +2,7 @@ package ado
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -14,6 +15,9 @@ import (
 	"github.com/steveyegge/beads/internal/tracker"
 	"github.com/steveyegge/beads/internal/types"
 )
+
+// Compile-time interface check.
+var _ tracker.IssueTracker = (*Tracker)(nil)
 
 func init() {
 	tracker.Register("ado", func() tracker.IssueTracker {
@@ -30,7 +34,7 @@ var adoWorkItemPattern = regexp.MustCompile(`/_workitems/edit/(\d+)`)
 type Tracker struct {
 	client  *Client
 	store   storage.Storage
-	mapper  *adoFieldMapper
+	mapper  tracker.FieldMapper
 	baseURL string // Resolved base URL for external ref matching
 	org     string
 	project string
@@ -53,7 +57,7 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 
 	pat := t.getConfig(ctx, "ado.pat", "AZURE_DEVOPS_PAT")
 	if pat == "" {
-		return fmt.Errorf("Azure DevOps PAT not configured (set ado.pat or AZURE_DEVOPS_PAT)")
+		return errors.New("Azure DevOps PAT not configured (set ado.pat or AZURE_DEVOPS_PAT)")
 	}
 
 	t.org = t.getConfig(ctx, "ado.org", "AZURE_DEVOPS_ORG")
@@ -61,10 +65,10 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 	customURL := t.getConfig(ctx, "ado.url", "AZURE_DEVOPS_URL")
 
 	if t.org == "" && customURL == "" {
-		return fmt.Errorf("Azure DevOps organization not configured (set ado.org or AZURE_DEVOPS_ORG)")
+		return errors.New("Azure DevOps organization not configured (set ado.org or AZURE_DEVOPS_ORG)")
 	}
 	if t.project == "" {
-		return fmt.Errorf("Azure DevOps project not configured (set ado.project or AZURE_DEVOPS_PROJECT)")
+		return errors.New("Azure DevOps project not configured (set ado.project or AZURE_DEVOPS_PROJECT)")
 	}
 
 	if t.org != "" {
@@ -103,7 +107,7 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 // to the Azure DevOps API.
 func (t *Tracker) Validate() error {
 	if t.client == nil {
-		return fmt.Errorf("Azure DevOps tracker not initialized")
+		return errors.New("Azure DevOps tracker not initialized")
 	}
 	ctx := context.Background()
 	_, err := t.client.ListProjects(ctx)
@@ -331,12 +335,4 @@ func adoWorkItemToTrackerIssue(wi *WorkItem) tracker.TrackerIssue {
 	}
 
 	return ti
-}
-
-// maskToken returns a partially masked version of a PAT for display.
-func maskToken(pat string) string {
-	if len(pat) <= 4 {
-		return "****"
-	}
-	return pat[:4] + strings.Repeat("*", len(pat)-4)
 }

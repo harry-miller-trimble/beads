@@ -20,7 +20,7 @@ var _ tracker.FieldMapper = (*adoFieldMapper)(nil)
 // stateMap overrides default status mapping (beads status → ADO state).
 // typeMap overrides default type mapping (beads type → ADO type).
 // Pass nil for either to use defaults only.
-func NewFieldMapper(stateMap, typeMap map[string]string) *adoFieldMapper {
+func NewFieldMapper(stateMap, typeMap map[string]string) tracker.FieldMapper {
 	sm := make(map[string]string)
 	for k, v := range stateMap {
 		sm[k] = v

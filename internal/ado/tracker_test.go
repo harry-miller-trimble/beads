@@ -1233,3 +1233,12 @@ func TestTracker_InitRejectsHTTPURL(t *testing.T) {
 		t.Errorf("error = %q, want mention of HTTPS required", err.Error())
 	}
 }
+
+// maskToken returns a partially masked version of a PAT for display.
+// Used only in tests.
+func maskToken(pat string) string {
+	if len(pat) <= 4 {
+		return "****"
+	}
+	return pat[:4] + strings.Repeat("*", len(pat)-4)
+}

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -118,7 +119,7 @@ func getADOConflictStrategy(preferLocal, preferADO, preferNewer bool) (ADOConfli
 		flagsSet++
 	}
 	if flagsSet > 1 {
-		return "", fmt.Errorf("cannot use multiple conflict resolution flags")
+		return "", errors.New("cannot use multiple conflict resolution flags")
 	}
 
 	if preferLocal {
@@ -223,13 +224,13 @@ func adoConfigToEnvVar(key string) string {
 // validateADOConfig checks that required configuration is present.
 func validateADOConfig(cfg ADOConfig) error {
 	if cfg.PAT == "" {
-		return fmt.Errorf("ado.pat is not configured. Set via 'bd config ado.pat <token>' or AZURE_DEVOPS_PAT environment variable")
+		return fmt.Errorf("ado.pat not configured: set via 'bd config ado.pat <token>' or AZURE_DEVOPS_PAT env var")
 	}
 	if cfg.Org == "" && cfg.URL == "" {
-		return fmt.Errorf("ado.org is not configured. Set via 'bd config ado.org <org>' or AZURE_DEVOPS_ORG environment variable")
+		return fmt.Errorf("ado.org not configured: set via 'bd config ado.org <org>' or AZURE_DEVOPS_ORG env var")
 	}
 	if cfg.Project == "" {
-		return fmt.Errorf("ado.project is not configured. Set via 'bd config ado.project <project>' or AZURE_DEVOPS_PROJECT environment variable")
+		return fmt.Errorf("ado.project not configured: set via 'bd config ado.project <project>' or AZURE_DEVOPS_PROJECT env var")
 	}
 	return nil
 }
@@ -382,10 +383,10 @@ func runADOStatus(cmd *cobra.Command, _ []string) error {
 func runADOProjects(cmd *cobra.Command, _ []string) error {
 	cfg := getADOConfig()
 	if cfg.PAT == "" {
-		return fmt.Errorf("ado.pat is not configured. Set via 'bd config ado.pat <token>' or AZURE_DEVOPS_PAT environment variable")
+		return fmt.Errorf("ado.pat not configured: set via 'bd config ado.pat <token>' or AZURE_DEVOPS_PAT env var")
 	}
 	if cfg.Org == "" && cfg.URL == "" {
-		return fmt.Errorf("ado.org is not configured. Set via 'bd config ado.org <org>' or AZURE_DEVOPS_ORG environment variable")
+		return fmt.Errorf("ado.org not configured: set via 'bd config ado.org <org>' or AZURE_DEVOPS_ORG env var")
 	}
 
 	out := cmd.OutOrStdout()
@@ -453,7 +454,7 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 	}
 
 	if adoSyncPullOnly && adoSyncPushOnly {
-		return fmt.Errorf("cannot use both --pull-only and --push-only")
+		return errors.New("cannot use both --pull-only and --push-only")
 	}
 
 	// Validate conflict flags
@@ -550,66 +551,66 @@ func runADOSync(cmd *cobra.Command, _ []string) error {
 		if cerr != nil {
 			warnings = append(warnings, fmt.Sprintf("Reconciliation skipped: %v", cerr))
 		} else {
-		reconciler := ado.NewReconciler(client, store)
+			reconciler := ado.NewReconciler(client, store)
 
-		shouldReconcile := adoReconcile || reconciler.ShouldReconcile(ctx)
-		if shouldReconcile {
-			adoIDMap := collectADOWorkItemMap(ctx, at)
-			workItemIDs := make([]int, 0, len(adoIDMap))
-			for id := range adoIDMap {
-				workItemIDs = append(workItemIDs, id)
-			}
-			if len(workItemIDs) > 0 {
-				rr, rerr := reconciler.Reconcile(ctx, workItemIDs)
-				if rerr != nil {
-					warnings = append(warnings, fmt.Sprintf("Reconciliation failed: %v", rerr))
-					if !jsonOutput {
-						_, _ = fmt.Fprintf(os.Stderr, "Warning: Reconciliation failed: %v\n", rerr)
-					}
-				} else {
-					reconcileResult = rr
-					// Close local issues whose ADO work items were deleted.
-					for _, idStr := range rr.Deleted {
-						adoID, err := strconv.Atoi(idStr)
-						if err != nil {
-							continue
+			shouldReconcile := adoReconcile || reconciler.ShouldReconcile(ctx)
+			if shouldReconcile {
+				adoIDMap := collectADOWorkItemMap(ctx, at)
+				workItemIDs := make([]int, 0, len(adoIDMap))
+				for id := range adoIDMap {
+					workItemIDs = append(workItemIDs, id)
+				}
+				if len(workItemIDs) > 0 {
+					rr, rerr := reconciler.Reconcile(ctx, workItemIDs)
+					if rerr != nil {
+						warnings = append(warnings, fmt.Sprintf("Reconciliation failed: %v", rerr))
+						if !jsonOutput {
+							_, _ = fmt.Fprintf(os.Stderr, "Warning: Reconciliation failed: %v\n", rerr)
 						}
-						localID, ok := adoIDMap[adoID]
-						if !ok {
-							continue
+					} else {
+						reconcileResult = rr
+						// Close local issues whose ADO work items were deleted.
+						for _, idStr := range rr.Deleted {
+							adoID, err := strconv.Atoi(idStr)
+							if err != nil {
+								continue
+							}
+							localID, ok := adoIDMap[adoID]
+							if !ok {
+								continue
+							}
+							reason := fmt.Sprintf("ADO work item %s deleted", idStr)
+							if cerr := store.CloseIssue(ctx, localID, reason, actor, ""); cerr != nil {
+								msg := fmt.Sprintf("Failed to close %s for deleted ADO #%s: %v", localID, idStr, cerr)
+								warnings = append(warnings, msg)
+								if !jsonOutput {
+									_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+								}
+							} else {
+								msg := fmt.Sprintf("Closed %s: ADO work item %s deleted", localID, idStr)
+								warnings = append(warnings, msg)
+								if !jsonOutput {
+									_, _ = fmt.Fprintf(out, "  %s\n", msg)
+								}
+							}
 						}
-						reason := fmt.Sprintf("ADO work item %s deleted", idStr)
-						if cerr := store.CloseIssue(ctx, localID, reason, actor, ""); cerr != nil {
-							msg := fmt.Sprintf("Failed to close %s for deleted ADO #%s: %v", localID, idStr, cerr)
+						for _, id := range rr.Denied {
+							msg := fmt.Sprintf("ADO work item %s access denied (403)", id)
 							warnings = append(warnings, msg)
 							if !jsonOutput {
 								_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
 							}
-						} else {
-							msg := fmt.Sprintf("Closed %s: ADO work item %s deleted", localID, idStr)
-							warnings = append(warnings, msg)
-							if !jsonOutput {
-								_, _ = fmt.Fprintf(out, "  %s\n", msg)
-							}
-						}
-					}
-					for _, id := range rr.Denied {
-						msg := fmt.Sprintf("ADO work item %s access denied (403)", id)
-						warnings = append(warnings, msg)
-						if !jsonOutput {
-							_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
 						}
 					}
 				}
+				if err := reconciler.ResetCounter(ctx); err != nil && !jsonOutput {
+					_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to reset reconcile counter: %v\n", err)
+				}
+			} else {
+				if err := reconciler.IncrementCounter(ctx); err != nil && !jsonOutput {
+					_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to increment reconcile counter: %v\n", err)
+				}
 			}
-			if err := reconciler.ResetCounter(ctx); err != nil && !jsonOutput {
-				_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to reset reconcile counter: %v\n", err)
-			}
-		} else {
-			if err := reconciler.IncrementCounter(ctx); err != nil && !jsonOutput {
-				_, _ = fmt.Fprintf(os.Stderr, "Warning: failed to increment reconcile counter: %v\n", err)
-			}
-		}
 		}
 	}
 
