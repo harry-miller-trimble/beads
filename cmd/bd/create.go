@@ -138,7 +138,7 @@ var createCmd = &cobra.Command{
 		if !types.IssueType(issueType).IsValidWithCustom(customTypes) {
 			validTypes := "bug, feature, task, epic, chore, decision"
 			if len(customTypes) > 0 {
-				validTypes += ", " + joinStrings(customTypes, ", ")
+				validTypes += ", " + joinStrings(customTypes)
 			}
 			FatalError("invalid issue type %q. Valid types: %s", issueType, validTypes)
 		}

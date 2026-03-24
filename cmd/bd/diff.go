@@ -103,7 +103,7 @@ Examples:
 						changes = append(changes, "description")
 					}
 					if len(changes) > 0 {
-						fmt.Printf(" (%s)", ui.RenderMuted(joinStrings(changes, ", ")))
+						fmt.Printf(" (%s)", ui.RenderMuted(joinStrings(changes)))
 					}
 				}
 				fmt.Println()
@@ -128,14 +128,14 @@ Examples:
 	},
 }
 
-// joinStrings joins strings with a separator (simple helper to avoid importing strings)
-func joinStrings(strs []string, sep string) string {
+// joinStrings joins strings with ", " (simple helper to avoid importing strings)
+func joinStrings(strs []string) string {
 	if len(strs) == 0 {
 		return ""
 	}
 	result := strs[0]
 	for i := 1; i < len(strs); i++ {
-		result += sep + strs[i]
+		result += ", " + strs[i]
 	}
 	return result
 }
