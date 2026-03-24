@@ -135,6 +135,7 @@ var createCmd = &cobra.Command{
 		// This catches invalid types before reaching the storage layer. (GH#2793)
 		issueType = string(types.IssueType(issueType).Normalize())
 		customTypes := ResolveCustomTypes(rootCtx, store)
+		customStatuses := ResolveCustomStatuses(rootCtx, store)
 		if !types.IssueType(issueType).IsValidWithCustom(customTypes) {
 			validTypes := "bug, feature, task, epic, chore, decision"
 			if len(customTypes) > 0 {
@@ -599,7 +600,13 @@ var createCmd = &cobra.Command{
 			// If error getting parent or parent has no source_repo, continue with default
 		}
 
-		if err := store.CreateIssue(ctx, issue, actor); err != nil {
+		// Pass resolved custom types/statuses so the storage layer validates
+		// against YAML-fallback types, not just DB types. (GH#2793)
+		if err := store.CreateIssuesWithFullOptions(ctx, []*types.Issue{issue}, actor, storage.BatchCreateOptions{
+			SkipPrefixValidation: true,
+			CustomTypes:          customTypes,
+			CustomStatuses:       customStatuses,
+		}); err != nil {
 			FatalError("%v", err)
 		}
 
@@ -964,7 +971,16 @@ func createInRig(cmd *cobra.Command, rigName, explicitID, title, description, is
 		PrefixOverride: prefixOverride,
 	}
 
-	if err := targetStore.CreateIssue(ctx, issue, actor); err != nil {
+	// Pass resolved custom types/statuses for YAML-fallback validation. (GH#2793)
+	// For the rig-routed path, re-resolve from the target store so types
+	// match the target database's configuration.
+	rigCustomTypes := ResolveCustomTypes(ctx, targetStore)
+	rigCustomStatuses := ResolveCustomStatuses(ctx, targetStore)
+	if err := targetStore.CreateIssuesWithFullOptions(ctx, []*types.Issue{issue}, actor, storage.BatchCreateOptions{
+		SkipPrefixValidation: true,
+		CustomTypes:          rigCustomTypes,
+		CustomStatuses:       rigCustomStatuses,
+	}); err != nil {
 		FatalError("failed to create issue in rig %q: %v", rigName, err)
 	}
 
