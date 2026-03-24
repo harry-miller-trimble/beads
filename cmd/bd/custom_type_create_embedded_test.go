@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// TestCreateCustomTypeYAMLFallback verifies that bd create accepts custom
+// TestEmbeddedCreateCustomTypeYAMLFallback verifies that bd create accepts custom
 // issue types configured in config.yaml even when the database config table
 // has no types.custom entry. This is the primary regression test for GH#2793.
-func TestCreateCustomTypeYAMLFallback(t *testing.T) {
+func TestEmbeddedCreateCustomTypeYAMLFallback(t *testing.T) {
 	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
 		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
 	}
@@ -82,10 +82,10 @@ func TestCreateCustomTypeYAMLFallback(t *testing.T) {
 	}
 }
 
-// TestCreateCustomTypeDBPrecedence verifies that when both DB and YAML have
+// TestEmbeddedCreateCustomTypeDBPrecedence verifies that when both DB and YAML have
 // custom types configured, the DB list takes precedence (YAML is only used
 // as fallback when DB returns empty).
-func TestCreateCustomTypeDBPrecedence(t *testing.T) {
+func TestEmbeddedCreateCustomTypeDBPrecedence(t *testing.T) {
 	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
 		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
 	}
@@ -102,7 +102,7 @@ func TestCreateCustomTypeDBPrecedence(t *testing.T) {
 	}
 
 	// Set a different custom type in the DB via bd config.
-	runBD(t, bd, dir, "config", "set", "types.custom", "db_type")
+	runBDCmd(t, bd, dir, "config", "set", "types.custom", "db_type")
 
 	// DB type should be accepted (DB takes precedence).
 	issue := bdCreate(t, bd, dir, "DB type issue", "-t", "db_type", "--description", "test")
@@ -118,9 +118,9 @@ func TestCreateCustomTypeDBPrecedence(t *testing.T) {
 	}
 }
 
-// TestCreateUpdateCustomTypeParity verifies that create and update accept
+// TestEmbeddedCreateUpdateCustomTypeParity verifies that create and update accept
 // the same custom types — both should use the shared resolver.
-func TestCreateUpdateCustomTypeParity(t *testing.T) {
+func TestEmbeddedCreateUpdateCustomTypeParity(t *testing.T) {
 	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
 		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
 	}
@@ -152,8 +152,8 @@ func TestCreateUpdateCustomTypeParity(t *testing.T) {
 	}
 }
 
-// runBD runs an arbitrary bd subcommand. Fatals on failure.
-func runBD(t *testing.T, bd, dir string, args ...string) string {
+// runBDCmd runs an arbitrary bd subcommand. Fatals on failure.
+func runBDCmd(t *testing.T, bd, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(bd, args...)
 	cmd.Dir = dir
