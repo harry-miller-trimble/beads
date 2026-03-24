@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/audit"
-	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/timeparsing"
@@ -44,17 +43,7 @@ create, update, show, or close operation).`,
 
 		if cmd.Flags().Changed("status") {
 			status, _ := cmd.Flags().GetString("status")
-			var customStatuses []string
-			if store != nil {
-				cs, err := store.GetCustomStatuses(rootCtx)
-				if err != nil {
-					if !jsonOutput {
-						fmt.Fprintf(os.Stderr, "%s Failed to get custom statuses: %v\n", ui.RenderWarn("!"), err)
-					}
-				} else {
-					customStatuses = cs
-				}
-			}
+			customStatuses := ResolveCustomStatuses(rootCtx, store)
 			if !types.Status(status).IsValidWithCustom(customStatuses) {
 				FatalErrorRespectJSON("invalid status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", status)
 			}
@@ -141,23 +130,7 @@ create, update, show, or close operation).`,
 			issueType, _ := cmd.Flags().GetString("type")
 			// Normalize aliases (e.g., "enhancement" -> "feature") before validating
 			issueType = utils.NormalizeIssueType(issueType)
-			var customTypes []string
-			if store != nil {
-				ct, err := store.GetCustomTypes(cmd.Context())
-				if err != nil {
-					// Log DB error but continue with YAML fallback (GH#1499 bd-2ll)
-					if !jsonOutput {
-						fmt.Fprintf(os.Stderr, "%s Failed to get custom types from DB: %v (falling back to config.yaml)\n",
-							ui.RenderWarn("!"), err)
-					}
-				} else {
-					customTypes = ct
-				}
-			}
-			// Fallback to config.yaml when store returns no custom types.
-			if len(customTypes) == 0 {
-				customTypes = config.GetCustomTypesFromYAML()
-			}
+			customTypes := ResolveCustomTypes(cmd.Context(), store)
 			if !types.IssueType(issueType).IsValidWithCustom(customTypes) {
 				validTypes := "bug, feature, task, epic, chore, decision"
 				if len(customTypes) > 0 {

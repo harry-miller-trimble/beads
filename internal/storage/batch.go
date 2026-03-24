@@ -22,4 +22,10 @@ type BatchCreateOptions struct {
 	OrphanHandling OrphanHandling
 	// SkipPrefixValidation skips prefix validation for existing IDs (used during import)
 	SkipPrefixValidation bool
+	// CustomTypes overrides the DB-sourced custom types when non-nil.
+	// The command layer resolves these (DB-first, YAML-fallback) and passes
+	// them in so the storage layer stays config-file-agnostic. (GH#2793)
+	CustomTypes []string
+	// CustomStatuses overrides the DB-sourced custom statuses when non-nil.
+	CustomStatuses []string
 }

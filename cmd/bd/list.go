@@ -439,11 +439,7 @@ var listCmd = &cobra.Command{
 		} else if status != "" && status != "all" {
 			s := types.Status(status)
 			// Validate --status value (bd-ttno)
-			var customStatuses []string
-			if store != nil {
-				cs, _ := store.GetCustomStatuses(rootCtx)
-				customStatuses = cs
-			}
+			customStatuses := ResolveCustomStatuses(rootCtx, store)
 			if !s.IsValidWithCustom(customStatuses) {
 				validList := "open, in_progress, blocked, deferred, closed, pinned, hooked"
 				if len(customStatuses) > 0 {
@@ -484,14 +480,7 @@ var listCmd = &cobra.Command{
 		if issueType != "" {
 			t := types.IssueType(issueType)
 			// Validate --type value (bd-ttno)
-			var customTypes []string
-			if store != nil {
-				ct, _ := store.GetCustomTypes(rootCtx)
-				customTypes = ct
-			}
-			if len(customTypes) == 0 {
-				customTypes = config.GetCustomTypesFromYAML()
-			}
+			customTypes := ResolveCustomTypes(rootCtx, store)
 			if !t.IsValidWithCustom(customTypes) {
 				validTypes := "bug, feature, task, epic, chore, decision"
 				if len(customTypes) > 0 {

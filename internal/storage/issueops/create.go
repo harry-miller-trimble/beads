@@ -21,14 +21,29 @@ type BatchContext struct {
 }
 
 // NewBatchContext reads config from the database and returns a BatchContext.
+// If opts.CustomTypes or opts.CustomStatuses are non-nil, those override
+// the DB-sourced values (the command layer resolves these with YAML fallback
+// so the storage layer stays config-file-agnostic). (GH#2793)
 func NewBatchContext(ctx context.Context, tx *sql.Tx, opts storage.BatchCreateOptions) (*BatchContext, error) {
-	customStatuses, err := GetCustomStatusesTx(ctx, tx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get custom statuses: %w", err)
+	var customStatuses []string
+	if opts.CustomStatuses != nil {
+		customStatuses = opts.CustomStatuses
+	} else {
+		cs, err := GetCustomStatusesTx(ctx, tx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get custom statuses: %w", err)
+		}
+		customStatuses = cs
 	}
-	customTypes, err := GetCustomTypesTx(ctx, tx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get custom types: %w", err)
+	var customTypes []string
+	if opts.CustomTypes != nil {
+		customTypes = opts.CustomTypes
+	} else {
+		ct, err := GetCustomTypesTx(ctx, tx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get custom types: %w", err)
+		}
+		customTypes = ct
 	}
 	configPrefix, err := ReadConfigPrefix(ctx, tx)
 	if err != nil {

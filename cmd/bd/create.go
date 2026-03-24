@@ -130,6 +130,19 @@ var createCmd = &cobra.Command{
 		issueType, _ := cmd.Flags().GetString("type")
 		assignee, _ := cmd.Flags().GetString("assignee")
 
+		// Normalize aliases (e.g., "enhancement" -> "feature") and validate
+		// issue type early, using the shared resolver for custom types.
+		// This catches invalid types before reaching the storage layer. (GH#2793)
+		issueType = string(types.IssueType(issueType).Normalize())
+		customTypes := ResolveCustomTypes(rootCtx, store)
+		if !types.IssueType(issueType).IsValidWithCustom(customTypes) {
+			validTypes := "bug, feature, task, epic, chore, decision"
+			if len(customTypes) > 0 {
+				validTypes += ", " + joinStrings(customTypes, ", ")
+			}
+			FatalError("invalid issue type %q. Valid types: %s", issueType, validTypes)
+		}
+
 		labels, _ := cmd.Flags().GetStringSlice("labels")
 		labelAlias, _ := cmd.Flags().GetStringSlice("label")
 		if len(labelAlias) > 0 {
