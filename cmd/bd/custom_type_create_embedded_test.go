@@ -22,9 +22,10 @@ func TestEmbeddedCreateCustomTypeYAMLFallback(t *testing.T) {
 	bd := buildEmbeddedBD(t)
 	dir, beadsDir, _ := bdInit(t, bd, "--prefix", "ct")
 
-	// Write config.yaml with a custom type (YAML-only, not in DB).
+	// Write config.yaml with custom types (YAML-only, not in DB).
+	// Config uses comma-separated format per docs/CONFIG.md.
 	configPath := filepath.Join(beadsDir, "config.yaml")
-	configContent := "types:\n  custom:\n    - verification\n    - spike\n"
+	configContent := "types:\n  custom: \"verification,spike\"\n"
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config.yaml: %v", err)
 	}
@@ -94,9 +95,9 @@ func TestEmbeddedCreateCustomTypeDBPrecedence(t *testing.T) {
 	bd := buildEmbeddedBD(t)
 	dir, beadsDir, _ := bdInit(t, bd, "--prefix", "pr")
 
-	// Write YAML config with one custom type.
+	// Write YAML config with one custom type (comma-separated format).
 	configPath := filepath.Join(beadsDir, "config.yaml")
-	configContent := "types:\n  custom:\n    - yaml_only_type\n"
+	configContent := "types:\n  custom: \"yaml_only_type\"\n"
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config.yaml: %v", err)
 	}
@@ -129,9 +130,9 @@ func TestEmbeddedCreateUpdateCustomTypeParity(t *testing.T) {
 	bd := buildEmbeddedBD(t)
 	dir, beadsDir, _ := bdInit(t, bd, "--prefix", "pa")
 
-	// Configure custom type only in YAML.
+	// Configure custom type only in YAML (comma-separated format).
 	configPath := filepath.Join(beadsDir, "config.yaml")
-	configContent := "types:\n  custom:\n    - verification\n"
+	configContent := "types:\n  custom: \"verification\"\n"
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config.yaml: %v", err)
 	}
