@@ -11,6 +11,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/lockfile"
+	"github.com/steveyegge/beads/internal/remotecache"
 )
 
 // staleLockAge is the maximum age of a lock file before it's considered stale.
@@ -42,6 +43,10 @@ func BootstrapFromGitRemoteWithDB(ctx context.Context, doltDir, gitRemoteURL, da
 	// Skip if Dolt database already exists
 	if doltExists(doltDir) {
 		return false, nil
+	}
+
+	if err := remotecache.ValidateRemoteURL(gitRemoteURL); err != nil {
+		return false, fmt.Errorf("invalid remote URL: %w", err)
 	}
 
 	if strings.TrimSpace(database) == "" {
