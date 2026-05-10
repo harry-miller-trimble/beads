@@ -113,6 +113,28 @@ func isProcessAlive(pid int) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
+// processOwnedByCurrentUser reports whether the given PID is owned by
+// the same UID as the current process. Used by `bd dolt killall
+// --force-port` to refuse to TERM/KILL a process owned by a different
+// user — that's almost certainly not bd's server, and root-owned
+// listeners on a developer port should require explicit `sudo` rather
+// than silent escalation.
+//
+// Falls back to `false` on any lookup error so the caller fails
+// closed (no kill rather than wrong kill).
+func processOwnedByCurrentUser(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "uid=").Output()
+	if err != nil {
+		return false
+	}
+	uidStr := strings.TrimSpace(string(out))
+	uid, err := strconv.Atoi(uidStr)
+	if err != nil {
+		return false
+	}
+	return uid == os.Getuid()
+}
+
 // gracefulStop sends SIGTERM, waits for the process to exit, then SIGKILL if needed.
 // Used by reclaimPort and StopWithForce where data has already been flushed.
 func gracefulStop(pid int, timeout time.Duration) error {

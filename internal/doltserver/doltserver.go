@@ -614,9 +614,58 @@ func EnsureRunningDetailed(beadsDir string) (port int, startedByUs bool, err err
 
 	s, err := Start(serverDir)
 	if err != nil {
-		return 0, false, err
+		return 0, false, augmentPortInUseError(serverDir, err)
 	}
 	return s.Port, true, nil
+}
+
+// augmentPortInUseError appends the missing-PID-file diagnostic to
+// errors returned by Start when the configured port is held by an
+// untracked listener. This is the GH#3687 path: PID file is gone but
+// the server (or some other listener) is still on the port, so
+// auto-start can't proceed and the operator needs a copy-pasteable
+// cleanup hint, not just "port in use".
+//
+// The probe runs with a short timeout so it can't extend CLI latency
+// noticeably even if the port is held by a slow non-MySQL listener.
+// If the probe says nothing is there, the original error is returned
+// unchanged — that case usually means a transient TIME_WAIT and the
+// existing message is already correct.
+func augmentPortInUseError(beadsDir string, err error) error {
+	if err == nil || !isPortInUseErr(err) {
+		return err
+	}
+	cfg := DefaultConfig(beadsDir)
+	if cfg.Port <= 0 {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	alive, probeErr := ProbeListener(ctx, cfg.Host, cfg.Port)
+	if probeErr != nil || !alive {
+		return err
+	}
+	return fmt.Errorf("%w\n\n%s", err, PIDFileMissingDiagnostic(cfg.Host, cfg.Port, PIDPath(beadsDir)))
+}
+
+// isPortInUseErr reports whether err originated from reclaimPort or
+// the Start path's port-conflict branches. We match on substrings
+// emitted by those sites because the wrapping uses %w but the
+// underlying errors are plain fmt.Errorf without typed sentinels.
+// Keeping the matcher narrow avoids over-augmenting unrelated errors
+// that happen to mention "port".
+func isPortInUseErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "is in use by a non-dolt process"),
+		strings.Contains(msg, "is in use by another project's dolt server"),
+		strings.Contains(msg, "is busy but cannot identify the process"):
+		return true
+	}
+	return false
 }
 
 // doltServerLogLevel is the --loglevel value passed to `dolt sql-server`.
@@ -1054,6 +1103,76 @@ func cleanupStateFiles(beadsDir string) error {
 // LogPath returns the path to the server log file.
 func LogPath(beadsDir string) string {
 	return logPath(beadsDir)
+}
+
+// KillPortResult describes what KillPort did. The fields are stable
+// JSON contract for `bd dolt killall --force-port` output.
+type KillPortResult struct {
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+	Killed  bool   `json:"killed"`
+	Reason  string `json:"reason"`
+	Cleanup []string `json:"cleanup,omitempty"` // PID/port files removed
+}
+
+// KillPort gracefully stops the dolt sql-server listening on the
+// given port. This is the explicit operator escape hatch for the
+// GH#3687 "missing PID file but listener still on port" situation.
+//
+// Safety:
+//   - Refuses to act when no process is listening (nothing to do).
+//   - Refuses to act when the listener is not a dolt sql-server
+//     (avoids killing local MySQL/MariaDB instances).
+//   - Refuses to act when the listening process is owned by a
+//     different user (requires explicit sudo/elevation, not silent).
+//   - Refuses to act on the current bd process's own PID.
+//   - On success, removes PID/port files for `beadsDir` so subsequent
+//     `bd` commands don't see stale state.
+//
+// The function is intentionally localized: this is the ONLY place in
+// beads where port→PID lookup feeds a kill decision. The decision
+// path is short and guarded; the rest of the codebase uses the
+// liveness-only ProbeListener.
+func KillPort(beadsDir, host string, port int) (*KillPortResult, error) {
+	if port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("invalid port %d", port)
+	}
+	res := &KillPortResult{Port: port}
+
+	pid := findPIDOnPort(port)
+	if pid == 0 {
+		res.Reason = "no listener on port"
+		return res, nil
+	}
+	res.PID = pid
+
+	if pid == os.Getpid() {
+		return res, fmt.Errorf("refusing to kill the current bd process (PID %d)", pid)
+	}
+
+	if !isDoltProcess(pid) {
+		return res, fmt.Errorf("PID %d on port %d is not a dolt sql-server; refusing to kill non-dolt processes", pid, port)
+	}
+
+	if !processOwnedByCurrentUser(pid) {
+		return res, fmt.Errorf("PID %d on port %d is owned by a different user; rerun with sudo or have the owner stop it", pid, port)
+	}
+
+	if err := gracefulStop(pid, 5*time.Second); err != nil {
+		return res, fmt.Errorf("stopping PID %d: %w", pid, err)
+	}
+	res.Killed = true
+	res.Reason = "killed"
+
+	if beadsDir != "" {
+		serverDir := resolveServerDir(beadsDir)
+		for _, p := range []string{pidPath(serverDir), portPath(serverDir)} {
+			if err := os.Remove(p); err == nil {
+				res.Cleanup = append(res.Cleanup, p)
+			}
+		}
+	}
+	return res, nil
 }
 
 // killStaleServersForDir finds and kills orphan dolt sql-server processes for

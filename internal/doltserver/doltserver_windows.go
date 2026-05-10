@@ -98,6 +98,21 @@ func isProcessInDir(pid int, dir string) bool {
 	return false
 }
 
+// processOwnedByCurrentUser reports whether the given PID is owned by
+// the current user. On Windows, listDoltProcessPIDs already enumerates
+// only processes visible to the current user via Get-CimInstance, so
+// we approximate ownership as "process is in the dolt PID list".
+// Returning true for visible dolt processes mirrors the Unix UID
+// check: kill those, refuse the rest.
+func processOwnedByCurrentUser(pid int) bool {
+	for _, p := range listDoltProcessPIDs() {
+		if p == pid {
+			return true
+		}
+	}
+	return false
+}
+
 // isProcessAlive checks if a process with the given PID is running.
 // Uses OpenProcess with PROCESS_QUERY_LIMITED_INFORMATION — returns error if
 // the process doesn't exist.

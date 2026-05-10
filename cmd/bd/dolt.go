@@ -414,12 +414,53 @@ on the next bd command unless auto-start is disabled.`,
 		serverDir := doltserver.ResolveServerDir(beadsDir)
 		force, _ := cmd.Flags().GetBool("force")
 
+		// Snapshot the configured port BEFORE calling StopWithForce —
+		// the "not running" branch in StopWithForce wipes both the PID
+		// file and the port file via cleanupStateFiles, which would
+		// otherwise leave us with no way to probe for the GH#3687
+		// false-negative case (PID file gone, server still listening).
+		cfgSnapshot := doltserver.DefaultConfig(serverDir)
+
 		if err := doltserver.StopWithForce(serverDir, force); err != nil {
+			if errors.Is(err, doltserver.ErrServerNotRunning) {
+				if diag := portInUseDiagnosticAt(serverDir, cfgSnapshot.Host, cfgSnapshot.Port); diag != "" {
+					fmt.Fprintln(os.Stderr, diag)
+					os.Exit(1)
+				}
+			}
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Println("Dolt server stopped.")
 	},
+}
+
+// portInUseDiagnostic resolves the project's configured Dolt port via
+// DefaultConfig and returns the missing-PID-file diagnostic if a
+// listener is currently responding there. Returns "" when there is no
+// listener, when the port can't be determined, or when the probe
+// fails. Used by `bd dolt status` (where the port file is intact at
+// the time of the call).
+func portInUseDiagnostic(beadsDir string) string {
+	cfg := doltserver.DefaultConfig(beadsDir)
+	return portInUseDiagnosticAt(beadsDir, cfg.Host, cfg.Port)
+}
+
+// portInUseDiagnosticAt is the lower-level helper that takes an
+// explicit host and port. Used by `bd dolt stop`, where the port file
+// has already been wiped by cleanupStateFiles by the time we want to
+// probe; the caller must snapshot the port before triggering the stop.
+func portInUseDiagnosticAt(beadsDir, host string, port int) string {
+	if port <= 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	alive, probeErr := doltserver.ProbeListener(ctx, host, port)
+	if probeErr != nil || !alive {
+		return ""
+	}
+	return doltserver.PIDFileMissingDiagnostic(host, port, doltserver.PIDPath(beadsDir))
 }
 
 var doltStatusCmd = &cobra.Command{
@@ -460,8 +501,33 @@ and database.`,
 			os.Exit(1)
 		}
 
+		// GH#3687: when the PID file is gone but a listener still holds
+		// the port, the bare "not running" answer is misleading. Run a
+		// SQL probe and, if something responds, surface the diagnostic
+		// alongside the regular status output (textual) or as an
+		// additional JSON field (machine-readable, additive contract).
+		var diag string
+		if state == nil || !state.Running {
+			diag = portInUseDiagnostic(serverDir)
+		}
+
 		if jsonOutput {
-			outputJSON(state)
+			payload := map[string]any{
+				"running":  state != nil && state.Running,
+				"pid":      0,
+				"port":     0,
+				"data_dir": "",
+			}
+			if state != nil {
+				payload["pid"] = state.PID
+				payload["port"] = state.Port
+				payload["data_dir"] = state.DataDir
+			}
+			if diag != "" {
+				payload["pid_file_missing"] = true
+				payload["diagnostic"] = diag
+			}
+			outputJSON(payload)
 			return
 		}
 
@@ -469,6 +535,10 @@ and database.`,
 			cfg := doltserver.DefaultConfig(serverDir)
 			fmt.Println("Dolt server: not running")
 			fmt.Printf("  Expected port: %d\n", cfg.Port)
+			if diag != "" {
+				fmt.Println()
+				fmt.Println(diag)
+			}
 			return
 		}
 
@@ -620,7 +690,12 @@ orphans and will be killed.
 
 In standalone mode, only dolt sql-server processes using the current
 project's Dolt data directory are eligible for cleanup. Other projects'
-servers are preserved.`,
+servers are preserved.
+
+Use --force-port <N> to kill a specific dolt sql-server listening on
+port N when the PID file is missing or stale (the GH#3687 case). The
+target process must be owned by the current user and must be a dolt
+sql-server; non-dolt processes are refused.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if isEmbeddedMode() {
 			fmt.Fprintln(os.Stderr, "Error: 'bd dolt killall' is not supported in embedded mode (no Dolt server)")
@@ -629,6 +704,33 @@ servers are preserved.`,
 		beadsDir := selectedDoltBeadsDir()
 		if beadsDir == "" {
 			beadsDir = "." // best effort
+		}
+
+		forcePort, _ := cmd.Flags().GetInt("force-port")
+		if forcePort > 0 {
+			cfg := doltserver.DefaultConfig(beadsDir)
+			res, err := doltserver.KillPort(beadsDir, cfg.Host, forcePort)
+			if err != nil {
+				if jsonOutput && res != nil {
+					outputJSON(res)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				}
+				os.Exit(1)
+			}
+			if jsonOutput {
+				outputJSON(res)
+				return
+			}
+			if !res.Killed {
+				fmt.Printf("No dolt sql-server found on port %d (%s).\n", res.Port, res.Reason)
+				return
+			}
+			fmt.Printf("Killed dolt sql-server on port %d (PID %d).\n", res.Port, res.PID)
+			for _, p := range res.Cleanup {
+				fmt.Printf("  Removed: %s\n", p)
+			}
+			return
 		}
 
 		killed, err := doltserver.KillStaleServers(beadsDir)
@@ -1182,6 +1284,7 @@ func isTimeoutError(err error) bool {
 func init() {
 	doltSetCmd.Flags().Bool("update-config", false, "Also write to config.yaml for team-wide defaults")
 	doltStopCmd.Flags().Bool("force", false, "Force stop the server")
+	doltKillallCmd.Flags().Int("force-port", 0, "Kill the dolt sql-server listening on the given port (must be owned by current user)")
 	doltPushCmd.Flags().Bool("force", false, "Force push (overwrite remote changes)")
 	doltPushCmd.Flags().String("remote", "", "Push to a specific named remote instead of the default")
 	doltPullCmd.Flags().String("remote", "", "Pull from a specific named remote instead of the default")
