@@ -1,0 +1,8 @@
+{
+  "name": "bd-echo",
+  "version": "0.1.0",
+  "tier": "provider",
+  "description": "Test tracker driver that echoes back issues for protocol validation",
+  "entrypoint": "bd-echo",
+  "capabilities": ["tracker.read", "tracker.write"]
+}
