@@ -1,0 +1,15 @@
+{
+  "name": "bd-ado",
+  "version": "0.1.0",
+  "description": "Azure DevOps tracker driver for beads",
+  "tier": "provider",
+  "capabilities": ["tracker.read", "tracker.write"],
+  "entry_point": "bd-ado",
+  "env_allowlist": [
+    "AZURE_DEVOPS_PAT",
+    "AZURE_DEVOPS_ORG",
+    "AZURE_DEVOPS_URL",
+    "AZURE_DEVOPS_PROJECT",
+    "AZURE_DEVOPS_PROJECTS"
+  ]
+}
