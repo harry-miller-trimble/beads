@@ -1326,6 +1326,7 @@ func NewRootCmd() *cobra.Command {
 	registerAdminCmds(cmd)
 	registerWhereCmds(cmd)
 	registerVcCmds(cmd)
+	registerPluginCmds(cmd)
 
 	// ── Non-command registration ──
 	registerTips()
