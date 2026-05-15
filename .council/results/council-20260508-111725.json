@@ -1,0 +1,705 @@
+{
+  "schema_version": "1.0",
+  "session_id": "council-20260508-111725",
+  "verdict": "Request Changes",
+  "confidence": "high",
+  "summary": "[ARCHITECT]\n[ISSUE] Public JSON contract is tightly coupled to internal recovery enums, which risks long-term schema lock-in and cross-layer leakage  \n  location: `/tmp/3687-plan/plan.md` (sections: “JSON shape compatibility”, `OwnershipReason` enum)  \n  category: design  \n  suggestion: Introduce a thin API-mapping layer (`internal reason -\u003e public reason code`) and treat JSON reason codes as a separately versioned contract; keep internal enum free to evolve without forcing backward-compat commitments on implementation details.  \n  confidence: high\n\n[ISSUE] The config-resolution architecture is still over-complicated and risks hidden dependency drift between CLI and internal callers  \n  location: `/tmp/3687-plan/plan.md` (sections: “Architectural boundary preservation”, “Split-brain mitigation”)  \n  category: design  \n  suggestion: Define one canonical `RecoverParamsProvider` interface in `internal/doltserver` and provide a single implementation in `internal/configadapter`; have both `cmd/bd` and internal paths depend on that interface instead of mixing “cmd helper + internal adapter” narrative. This reduces ambiguity and prevents future shotgun surgery when config precedence changes.  \n  confidence: medium\n\n[SUGGESTION] `ResolveAndHealState` is intentionally side-effecting, but using it in `status` still creates command-query tension and cognitive overhead  \n  location: `/tmp/3687-plan/plan.md` (sections: “ResolveAndHealState”, Layer 3 `dolt status`)  \n  category: design  \n  suggestion: Keep current behavior, but codify a strict rule: status may heal only PID/port metadata, never process state. Add a dedicated test name and doc invariant for this to prevent future behavior creep.  \n  confidence: high\n\n[SUGGESTION] The plan’s module depth is good, but `Recoverer` is close to becoming a “policy + orchestration + platform coordination” hub  \n  location: `/tmp/3687-plan/plan.md` (Layer 1 `recover.go`)  \n  category: design  \n  suggestion: Extract ownership policy into a small `OwnershipEvaluator` (pure) and keep `Recoverer` as orchestration only. This lowers RFC/CBO pressure and keeps extensibility cleaner if new ownership signals are added.  \n  confidence: medium\n\n[SUGGESTION] Single-PR delivery is defensible, but review risk is still high for a cross-platform lifecycle change  \n  location: `/tmp/3687-plan/plan.md` (section: “Delivery slicing decision”)  \n  category: completeness  \n  suggestion: Keep single PR default, but predefine explicit split trigger criteria (e.g., unresolved review \u003e N days or Windows-specific churn \u003e M comments) and prepared fallback branches to reduce integration risk without changing architectural intent.  \n  confidence: medium\n\n[GOOD] Strong structural decomposition: Layer 1 (recovery), Layer 2 (state orchestration), Layer 3 (CLI behavior contract) gives clear responsibility boundaries and avoids a god-object CLI command.\n\n[GOOD] Excellent abstraction discipline: `PortLookup`, `IdentityResolver`, and `SQLProber` isolate platform and IO volatility behind DI seams, improving testability and reducing concrete coupling.\n\n[GOOD] Information hiding is materially improved: ownership predicate is centralized and reused for recovery + stop revalidation, which minimizes drift and aligns with stable-abstractions principles.\n\n[GOOD] The explicit `StateSource` + `RecoveryOutcome` model is a solid anti-ambiguity move; it prevents boolean-smell APIs and keeps legacy `State` semantics intact.\n\n[GOOD] Safety-critical invariants are first-class (never stop unowned, stdout/stderr discipline, best-effort persistence), with tests mapped to behavior contract rows—this is architecturally mature for an operational bug fix.\n\nNo P0/P1 architectural blockers remain from this review. Remaining concerns are P2-level design hardening and contract hygiene, acceptable to ship with follow-up discipline.\n\n[STRATEGIST]\n[GOOD] The plan is now strongly aligned to purpose: it fixes the actual operator pain (false “not running” + inability to stop/start), and does so symmetrically across `status`/`stop`/`start` and internal `EnsureRunning`, which directly addresses the prior “partial fix” failure mode.\n\n[GOOD] Completeness is notably improved: missing, malformed, unreadable, stale, reused PID, read-only PID-dir, and unowned-listener paths are all explicitly modeled with command-by-command behavior contracts and matching acceptance criteria.\n\n[GOOD] The approach follows sound information-hiding boundaries (Parnas): ownership logic is centralized in `Recoverer.checkOwnership`, state healing is isolated from CLI presentation, and config resolution is separated from lifecycle mechanics.\n\n[SUGGESTION] Add explicit “non-regression matrix” acceptance bullets for unaffected modes\n  location: `/tmp/3687-plan/plan.md`\n  category: completeness\n  suggestion: Add 3-4 explicit checks that embedded mode, non-shared local mode, and existing remote-host external-server status behavior remain unchanged (exit codes + JSON shape). This reduces change-failure risk by making “what must not change” first-class.\n  confidence: high\n\n[SUGGESTION] Add rollout/abort criteria tied to DORA + SPACE\n  location: `/tmp/3687-plan/plan.md`\n  category: design\n  suggestion: Define post-merge success thresholds (e.g., median recovery-to-success time, rate of `stop.refused_unowned`, and support incidents for shared-server start/stop). Include a rollback trigger if refusal/error rates spike. This strengthens restore-time and productivity validation.\n  confidence: medium\n\n[SUGGESTION] Consider delivery slicing fallback if review stalls\n  location: `/tmp/3687-plan/plan.md`\n  category: design\n  suggestion: Keep single-PR as default, but predefine a contingency split (core Linux/Darwin recovery contract first, Windows fallback second) if review latency exceeds a threshold. This preserves purpose while reducing lead-time risk.\n  confidence: medium\n\n[SUGGESTION] Reduce cognitive load with a short maintainer “operational invariants” appendix\n  location: `/tmp/3687-plan/plan.md`\n  category: completeness\n  suggestion: Add a concise invariant list (“never signal unowned PID”, “stdout JSON never polluted”, “persist failure is non-fatal for stop”) and map each to test names. This improves onboarding and long-term maintainability.\n  confidence: high\n\n[GOOD] Priority of effort is generally strong: most complexity is spent on safety-critical ownership proof and consistency, not on low-value polish.\n\nNo P0/P1 blockers remain from a strategy lens; remaining concerns are P2-level refinements suitable as follow-ups or minor pre-merge hardening.\n\n[CRITIC]\n[BLOCKER] Legacy PID revalidation can break healthy running servers if the old bd-spawned process lacks `--data-dir`\n  location: plan.md, “ResolveAndHealState composability” / “Start invariant”\n  category: correctness\n  suggestion: Before making legacy `IsRunning` success require the new full ownership predicate, explicitly confirm current released `Start()` always included `--data-dir`. If not, treat legacy PID-file success as trusted legacy state, and apply full ownership only to recovery/stop paths where the PID file is missing or stale.\n  confidence: medium\n  confidence_score: 0.72\n  severity_rationale: This could turn a previously working server into `unowned` after upgrade, blocking status/start/stop despite a valid PID file.\n  scope: in-diff\n  scope_rationale: The proposed plan adds stricter validation to an existing successful path.\n\n[ISSUE] The plan has contradictory Darwin identity details\n  location: plan.md, “Identity resolution” and “ProcessIdentity”\n  category: correctness\n  suggestion: Remove all remaining `ps`/`lsof -F a` cmdline fallback language for Darwin, or explicitly define when fallback is allowed. The later section says “No `ps` cmdline fallback — ever,” but earlier fields/tests still describe `ps` fallback and `CmdLineSource == \"ps\"`.\n  confidence: high\n  confidence_score: 0.88\n  severity_rationale: Contradictory identity-source rules will produce divergent implementations and tests for a core ownership predicate.\n  scope: in-diff\n  scope_rationale: The inconsistency is inside the proposed design contract.\n\n[ISSUE] `PersistOwnedState` signature and `PersistResult` design disagree\n  location: plan.md, Layer 1 `PersistOwnedState`; Layer 1b `PersistResult`\n  category: correctness\n  suggestion: Change the planned API to one canonical signature, likely `func PersistOwnedState(beadsDir string, rs *RecoveredState) PersistResult`, and update all callers/tests to use that shape.\n  confidence: high\n  confidence_score: 0.9\n  severity_rationale: This is a direct contract mismatch that will cause implementation drift or compile churn.\n  scope: in-diff\n  scope_rationale: Both incompatible contracts are introduced by the plan.\n\n[ISSUE] `StopFromRecovery` naming is inconsistent across the plan and tests\n  location: plan.md, `StopFromRecovery` API and `TestRecoverer_StopRecoveredState_RevalidatesIdentity`\n  category: completeness\n  suggestion: Rename the test and all prose to the same API name, `StopFromRecovery`, before implementation.\n  confidence: high\n  confidence_score: 0.84\n  severity_rationale: This is not behavior-breaking by itself, but it is cheap evidence of contract drift in a high-risk path.\n  scope: in-diff\n  scope_rationale: The mismatch is in the new planned API/test names.\n  effort: trivial\n\n[ISSUE] Linux host matching still risks false positives for non-local configured hosts\n  location: plan.md, Linux `/proc` algorithm / `TestRecoverer_HostMatching`\n  category: correctness\n  suggestion: Specify exact host equivalence rules for configured non-local addresses. Wildcard listeners can match a local target, but a listener bound only to `127.0.0.1` should not satisfy a configured external host, and vice versa.\n  confidence: medium\n  confidence_score: 0.67\n  severity_rationale: Wrong host matching can recover or stop the wrong server when users configure non-default hosts.\n  scope: in-diff\n  scope_rationale: The new port lookup algorithm owns this matching behavior.\n\n[SUGGESTION] The `sql-server` argv-position rule is under-specified for valid Dolt global flags\n  location: plan.md, Ownership model signal 2\n  category: correctness\n  suggestion: Define whether `dolt --flag value sql-server ...` is accepted. If bd never emits global flags, document that the recovery predicate only promises to recover bd’s exact Start argv shape.\n  confidence: medium\n  confidence_score: 0.62\n  severity_rationale: Mostly a false-negative risk, not an unsafe false-positive, so it is below blocker severity.\n  scope: in-diff\n  scope_rationale: The new parser/ownership predicate defines the behavior.\n\n[ISSUE] `EnsureRunning` wiring crosses package boundaries in a confusing way\n  location: plan.md, “Architectural boundary preservation” / “Split-brain mitigation”\n  category: design\n  suggestion: Clarify the actual package dependency graph. If `internal/doltserver` calls `internal/configadapter`, say so directly and ensure `configadapter` does not import `doltserver`; otherwise keep all config resolution at CLI/caller boundaries.\n  confidence: medium\n  confidence_score: 0.7\n  severity_rationale: Ambiguous package ownership can create import cycles or hidden config coupling in a core startup path.\n  scope: in-diff\n  scope_rationale: The planned refactor introduces the adapter dependency.\n\n[SUGGESTION] No test explicitly covers unknown future `StateSource` handling\n  location: plan.md, Layer 3 command behavior contract\n  category: completeness\n  suggestion: Add default branches in status/stop/start that return an internal error for unknown `StateSource`, plus a small unit test if feasible.\n  confidence: medium\n  confidence_score: 0.66\n  severity_rationale: This prevents silent success on enum expansion; impact is future-proofing rather than current breakage.\n  scope: in-diff\n  scope_rationale: The new enum drives CLI behavior.\n  effort: small\n\n[SUGGESTION] The plan estimates ~500 LOC, but the described behavior is closer to a high-complexity platform feature\n  location: plan.md, Estimated effort\n  category: design\n  suggestion: Either slice implementation by platform behind stable interfaces or raise the estimate/reviewer plan. Per-platform process inspection, JSON compatibility, PID persistence hardening, CLI behavior, and integration tests are multiple risk surfaces.\n  confidence: high\n  confidence_score: 0.82\n  severity_rationale: Underestimating scope increases review risk, but the design can still ship if implemented carefully.\n  scope: system\n  scope_rationale: This is about delivery risk across the whole proposed change.\n\n[GOOD] The plan correctly separates “listener exists” from “bd owns this listener,” and refuses to stop unproven processes.\n\n[GOOD] Dependency injection for `PortLookup`, `IdentityResolver`, and `SQLProber` makes the hard failure modes testable without relying on live OS state.\n\n[GOOD] The command behavior table is a strong contract; it should prevent another asymmetric status/stop/start fix.\n\n[SECURITY]\n## Security Review: PID-file Recovery Plan (GH#3687)\n\nThis plan is exceptionally well-thought-out from a security perspective. The council iteration process has addressed most concerns I would typically raise. My review focuses on residual risks and areas where implementation could still go wrong.\n\n---\n\n[GOOD] The five-signal ownership predicate (exe path, argv token-exact match, data-dir canonicalization, port binding, UID match) is a strong defense-in-depth design against silent process adoption. This directly addresses CWE-283 (Unverified Ownership).\n\n[GOOD] Argument-array `exec.Command` throughout, with integer-typed PID/port values, eliminates command injection vectors (CWE-78). The plan explicitly bans shell interpolation and tests enforce it.\n\n[GOOD] Atomic PID-file writes with `O_NOFOLLOW`, `O_EXCL`, temp+rename, mode 0600, and parent directory ownership verification is a textbook defense against symlink attacks (CWE-59) and race conditions.\n\n[GOOD] Darwin cmdline sourced exclusively from `KERN_PROCARGS2` (kernel-authoritative), with explicit rejection of `ps`-based fallback for ownership decisions. This closes the argv[0] spoofing vector.\n\n[GOOD] DSN hardening (`allowAllFiles=false`, `interpolateParams=false`, explicit timeouts) prevents the MySQL driver from being used as an SSRF or file-read vector against a malicious listener.\n\n---\n\n[ISSUE] TOCTOU gap on Darwin/Windows atomic rename is acknowledged but insufficiently mitigated\n  location: internal/doltserver/persist.go (planned)\n  category: security\n  suggestion: On Darwin, use `renamex_np(RENAME_EXCL)` (available since macOS 10.12) as the equivalent of Linux's `RENAME_NOREPLACE`, falling back to Lstat+Rename only on older kernels. This narrows the window to the same bound as Linux. Document the residual race on Windows as a known limitation bounded by the same-UID trust assumption.\n  confidence: medium\n  confidence_score: 0.65\n  severity_rationale: Exploitable only by a same-UID adversary who can win a tight race on the PID-file path, which the plan already declares as outside the trust boundary — but tightening it is cheap.\n  scope: in-diff\n  scope_rationale: This is new code being introduced by this change.\n\n[ISSUE] `io.LimitReader` 64KB cap on shellout output sets `Truncated=true` but the plan doesn't specify what happens to the *partial parse* before truncation is detected\n  location: internal/doltserver/recover.go (planned IdentityResolver)\n  category: security\n  suggestion: Ensure `parseDoltSQLServerDataDir` is called ONLY after confirming `Truncated == false`. If the implementation parses argv first and checks truncation second, a crafted process with a 64KB+ cmdline could place `--data-dir=\u003cbd-data-dir\u003e` in the first 64KB and the real `--data-dir=\u003cattacker-dir\u003e` after the cut, causing a false ownership match. The check order must be: read → check truncation → parse. Add a test with a 65KB cmdline where the last `--data-dir` (which wins) is beyond the cap.\n  confidence: high\n  confidence_score: 0.85\n  severity_rationale: If parse-before-truncation-check is implemented, an attacker running as the same UID could craft a process that passes the ownership predicate, leading to PID-file takeover (silent adoption of an adversary-controlled process).\n  scope: in-diff\n  scope_rationale: This is new parsing logic being introduced.\n\n[SUGGESTION] The plan specifies UID comparison uses real UID but doesn't specify constant-time comparison\n  location: internal/doltserver/recover.go (planned checkOwnership)\n  category: security\n  suggestion: Integer UID comparison is inherently constant-time (`==` on `int`), so this is fine — but document it explicitly in a code comment to prevent a future refactor from switching to string-based UID comparison (e.g., on Windows SID strings) without using `subtle.ConstantTimeCompare`. Windows SID comparison should use `EqualSid()` API, not string equality.\n  confidence: medium\n  confidence_score: 0.55\n  severity_rationale: Timing side-channels on local UID comparison are not practically exploitable, but the Windows SID path could introduce one if not handled carefully.\n  scope: in-diff\n  scope_rationale: New ownership comparison logic.\n\n[SUGGESTION] The SQL probe connects to an untrusted listener — plan should specify TLS verification posture\n  location: internal/doltserver/recover.go (planned SQLProber)\n  category: security\n  suggestion: Explicitly set `tls=false` or `tls=skip-verify` in the DSN and document that the SQL probe is a liveness check only, not a trust establishment. If the probe were to negotiate TLS with a malicious listener presenting a crafted certificate, and Go's `crypto/tls` had a parsing vulnerability, the probe could be an attack surface. Making TLS opt-out explicit removes ambiguity.\n  confidence: medium\n  confidence_score: 0.50\n  severity_rationale: The probe targets localhost, and TLS negotiation bugs in Go's standard library are rare but not unprecedented; explicit TLS=false eliminates the class entirely.\n  scope: in-diff\n  scope_rationale: New network connection to potentially untrusted listener.\n\n[SUGGESTION] Windows `Get-CimInstance` output parsing for ProcessIdentity lacks specification of encoding/locale handling\n  location: internal/doltserver/recover_windows.go (planned)\n  category: security\n  suggestion: Pin PowerShell output to UTF-8 via `[Console]::OutputEncoding = [Text.Encoding]::UTF8` or use `-OutputFormat XML` with structured parsing. Locale-dependent output (e.g., localized field names in `wmic`) could cause silent parse failures that bypass identity resolution, degrading to `Owned=false` (safe) but potentially causing persistent recovery failures on non-English Windows systems.\n  confidence: medium\n  confidence_score: 0.60\n  severity_rationale: Fails safe (Owned=false) but could cause the feature to be non-functional on a class of systems, which is a correctness issue more than a security one.\n  scope: in-diff\n  scope_rationale: New platform-specific code.\n\n---\n\n**Overall assessment**: No blockers. The plan is security-mature — the multi-round council process has addressed the critical issues (process adoption without ownership proof, command injection, symlink attacks, argv spoofing). The two [ISSUE] findings are implementation-order concerns that need explicit attention during coding but don't block the design. Ship it.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "architect",
+      "location": "`/tmp/3687-plan/plan.md` (sections: “JSON shape compatibility”, `OwnershipReason` enum)",
+      "finding": "Public JSON contract is tightly coupled to internal recovery enums, which risks long-term schema lock-in and cross-layer leakage",
+      "suggestion": "Introduce a thin API-mapping layer (`internal reason -\u003e public reason code`) and treat JSON reason codes as a separately versioned contract; keep internal enum free to evolve without forcing backward-compat commitments on implementation details.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "architect",
+      "location": "`/tmp/3687-plan/plan.md` (sections: “Architectural boundary preservation”, “Split-brain mitigation”)",
+      "finding": "The config-resolution architecture is still over-complicated and risks hidden dependency drift between CLI and internal callers",
+      "suggestion": "Define one canonical `RecoverParamsProvider` interface in `internal/doltserver` and provide a single implementation in `internal/configadapter`; have both `cmd/bd` and internal paths depend on that interface instead of mixing “cmd helper + internal adapter” narrative. This reduces ambiguity and prevents future shotgun surgery when config precedence changes.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "architect",
+      "location": "`/tmp/3687-plan/plan.md` (sections: “ResolveAndHealState”, Layer 3 `dolt status`)",
+      "finding": "`ResolveAndHealState` is intentionally side-effecting, but using it in `status` still creates command-query tension and cognitive overhead",
+      "suggestion": "Keep current behavior, but codify a strict rule: status may heal only PID/port metadata, never process state. Add a dedicated test name and doc invariant for this to prevent future behavior creep.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "architect",
+      "location": "`/tmp/3687-plan/plan.md` (Layer 1 `recover.go`)",
+      "finding": "The plan’s module depth is good, but `Recoverer` is close to becoming a “policy + orchestration + platform coordination” hub",
+      "suggestion": "Extract ownership policy into a small `OwnershipEvaluator` (pure) and keep `Recoverer` as orchestration only. This lowers RFC/CBO pressure and keeps extensibility cleaner if new ownership signals are added.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "architect",
+      "location": "`/tmp/3687-plan/plan.md` (section: “Delivery slicing decision”)",
+      "finding": "Single-PR delivery is defensible, but review risk is still high for a cross-platform lifecycle change",
+      "suggestion": "Keep single PR default, but predefine explicit split trigger criteria (e.g., unresolved review \u003e N days or Windows-specific churn \u003e M comments) and prepared fallback branches to reduce integration risk without changing architectural intent.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Strong structural decomposition: Layer 1 (recovery), Layer 2 (state orchestration), Layer 3 (CLI behavior contract) gives clear responsibility boundaries and avoids a god-object CLI command.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Excellent abstraction discipline: `PortLookup`, `IdentityResolver`, and `SQLProber` isolate platform and IO volatility behind DI seams, improving testability and reducing concrete coupling.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Information hiding is materially improved: ownership predicate is centralized and reused for recovery + stop revalidation, which minimizes drift and aligns with stable-abstractions principles.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "The explicit `StateSource` + `RecoveryOutcome` model is a solid anti-ambiguity move; it prevents boolean-smell APIs and keeps legacy `State` semantics intact.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Safety-critical invariants are first-class (never stop unowned, stdout/stderr discipline, best-effort persistence), with tests mapped to behavior contract rows—this is architecturally mature for an operational bug fix.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "The plan is now strongly aligned to purpose: it fixes the actual operator pain (false “not running” + inability to stop/start), and does so symmetrically across `status`/`stop`/`start` and internal `EnsureRunning`, which directly addresses the prior “partial fix” failure mode.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "Completeness is notably improved: missing, malformed, unreadable, stale, reused PID, read-only PID-dir, and unowned-listener paths are all explicitly modeled with command-by-command behavior contracts and matching acceptance criteria.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "The approach follows sound information-hiding boundaries (Parnas): ownership logic is centralized in `Recoverer.checkOwnership`, state healing is isolated from CLI presentation, and config resolution is separated from lifecycle mechanics.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md`",
+      "finding": "Add explicit “non-regression matrix” acceptance bullets for unaffected modes",
+      "suggestion": "Add 3-4 explicit checks that embedded mode, non-shared local mode, and existing remote-host external-server status behavior remain unchanged (exit codes + JSON shape). This reduces change-failure risk by making “what must not change” first-class.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md`",
+      "finding": "Add rollout/abort criteria tied to DORA + SPACE",
+      "suggestion": "Define post-merge success thresholds (e.g., median recovery-to-success time, rate of `stop.refused_unowned`, and support incidents for shared-server start/stop). Include a rollback trigger if refusal/error rates spike. This strengthens restore-time and productivity validation.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md`",
+      "finding": "Consider delivery slicing fallback if review stalls",
+      "suggestion": "Keep single-PR as default, but predefine a contingency split (core Linux/Darwin recovery contract first, Windows fallback second) if review latency exceeds a threshold. This preserves purpose while reducing lead-time risk.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md`",
+      "finding": "Reduce cognitive load with a short maintainer “operational invariants” appendix",
+      "suggestion": "Add a concise invariant list (“never signal unowned PID”, “stdout JSON never polluted”, “persist failure is non-fatal for stop”) and map each to test names. This improves onboarding and long-term maintainability.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "Priority of effort is generally strong: most complexity is spent on safety-critical ownership proof and consistency, not on low-value polish.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "critical",
+      "category": "correctness",
+      "role": "critic",
+      "location": "plan.md, “ResolveAndHealState composability” / “Start invariant”",
+      "finding": "Legacy PID revalidation can break healthy running servers if the old bd-spawned process lacks `--data-dir`",
+      "suggestion": "Before making legacy `IsRunning` success require the new full ownership predicate, explicitly confirm current released `Start()` always included `--data-dir`. If not, treat legacy PID-file success as trusted legacy state, and apply full ownership only to recovery/stop paths where the PID file is missing or stale.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "This could turn a previously working server into `unowned` after upgrade, blocking status/start/stop despite a valid PID file.",
+      "confidence_score": 0.72,
+      "scope": "in-diff",
+      "scope_rationale": "The proposed plan adds stricter validation to an existing successful path."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "plan.md, “Identity resolution” and “ProcessIdentity”",
+      "finding": "The plan has contradictory Darwin identity details",
+      "suggestion": "Remove all remaining `ps`/`lsof -F a` cmdline fallback language for Darwin, or explicitly define when fallback is allowed. The later section says “No `ps` cmdline fallback — ever,” but earlier fields/tests still describe `ps` fallback and `CmdLineSource == \"ps\"`.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "Contradictory identity-source rules will produce divergent implementations and tests for a core ownership predicate.",
+      "confidence_score": 0.88,
+      "scope": "in-diff",
+      "scope_rationale": "The inconsistency is inside the proposed design contract."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "plan.md, Layer 1 `PersistOwnedState`; Layer 1b `PersistResult`",
+      "finding": "`PersistOwnedState` signature and `PersistResult` design disagree",
+      "suggestion": "Change the planned API to one canonical signature, likely `func PersistOwnedState(beadsDir string, rs *RecoveredState) PersistResult`, and update all callers/tests to use that shape.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This is a direct contract mismatch that will cause implementation drift or compile churn.",
+      "confidence_score": 0.9,
+      "scope": "in-diff",
+      "scope_rationale": "Both incompatible contracts are introduced by the plan."
+    },
+    {
+      "severity": "high",
+      "category": "completeness",
+      "role": "critic",
+      "location": "plan.md, `StopFromRecovery` API and `TestRecoverer_StopRecoveredState_RevalidatesIdentity`",
+      "finding": "`StopFromRecovery` naming is inconsistent across the plan and tests",
+      "suggestion": "Rename the test and all prose to the same API name, `StopFromRecovery`, before implementation.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This is not behavior-breaking by itself, but it is cheap evidence of contract drift in a high-risk path.",
+      "confidence_score": 0.84,
+      "scope": "in-diff",
+      "scope_rationale": "The mismatch is in the new planned API/test names.",
+      "metadata": {
+        "effort": "trivial"
+      }
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "plan.md, Linux `/proc` algorithm / `TestRecoverer_HostMatching`",
+      "finding": "Linux host matching still risks false positives for non-local configured hosts",
+      "suggestion": "Specify exact host equivalence rules for configured non-local addresses. Wildcard listeners can match a local target, but a listener bound only to `127.0.0.1` should not satisfy a configured external host, and vice versa.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Wrong host matching can recover or stop the wrong server when users configure non-default hosts.",
+      "confidence_score": 0.67,
+      "scope": "in-diff",
+      "scope_rationale": "The new port lookup algorithm owns this matching behavior."
+    },
+    {
+      "severity": "medium",
+      "category": "correctness",
+      "role": "critic",
+      "location": "plan.md, Ownership model signal 2",
+      "finding": "The `sql-server` argv-position rule is under-specified for valid Dolt global flags",
+      "suggestion": "Define whether `dolt --flag value sql-server ...` is accepted. If bd never emits global flags, document that the recovery predicate only promises to recover bd’s exact Start argv shape.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Mostly a false-negative risk, not an unsafe false-positive, so it is below blocker severity.",
+      "confidence_score": 0.62,
+      "scope": "in-diff",
+      "scope_rationale": "The new parser/ownership predicate defines the behavior."
+    },
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "critic",
+      "location": "plan.md, “Architectural boundary preservation” / “Split-brain mitigation”",
+      "finding": "`EnsureRunning` wiring crosses package boundaries in a confusing way",
+      "suggestion": "Clarify the actual package dependency graph. If `internal/doltserver` calls `internal/configadapter`, say so directly and ensure `configadapter` does not import `doltserver`; otherwise keep all config resolution at CLI/caller boundaries.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Ambiguous package ownership can create import cycles or hidden config coupling in a core startup path.",
+      "confidence_score": 0.7,
+      "scope": "in-diff",
+      "scope_rationale": "The planned refactor introduces the adapter dependency."
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "plan.md, Layer 3 command behavior contract",
+      "finding": "No test explicitly covers unknown future `StateSource` handling",
+      "suggestion": "Add default branches in status/stop/start that return an internal error for unknown `StateSource`, plus a small unit test if feasible.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "This prevents silent success on enum expansion; impact is future-proofing rather than current breakage.",
+      "confidence_score": 0.66,
+      "scope": "in-diff",
+      "scope_rationale": "The new enum drives CLI behavior.",
+      "metadata": {
+        "effort": "small"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "critic",
+      "location": "plan.md, Estimated effort",
+      "finding": "The plan estimates ~500 LOC, but the described behavior is closer to a high-complexity platform feature",
+      "suggestion": "Either slice implementation by platform behind stable interfaces or raise the estimate/reviewer plan. Per-platform process inspection, JSON compatibility, PID persistence hardening, CLI behavior, and integration tests are multiple risk surfaces.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "Underestimating scope increases review risk, but the design can still ship if implemented carefully.",
+      "confidence_score": 0.82,
+      "scope": "system",
+      "scope_rationale": "This is about delivery risk across the whole proposed change."
+    },
+    {
+      "severity": "info",
+      "category": "correctness",
+      "role": "critic",
+      "finding": "The plan correctly separates “listener exists” from “bd owns this listener,” and refuses to stop unproven processes.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "correctness",
+      "role": "critic",
+      "finding": "Dependency injection for `PortLookup`, `IdentityResolver`, and `SQLProber` makes the hard failure modes testable without relying on live OS state.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "correctness",
+      "role": "critic",
+      "finding": "The command behavior table is a strong contract; it should prevent another asymmetric status/stop/start fix.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "The five-signal ownership predicate (exe path, argv token-exact match, data-dir canonicalization, port binding, UID match) is a strong defense-in-depth design against silent process adoption. This directly addresses CWE-283 (Unverified Ownership).",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "Argument-array `exec.Command` throughout, with integer-typed PID/port values, eliminates command injection vectors (CWE-78). The plan explicitly bans shell interpolation and tests enforce it.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "Atomic PID-file writes with `O_NOFOLLOW`, `O_EXCL`, temp+rename, mode 0600, and parent directory ownership verification is a textbook defense against symlink attacks (CWE-59) and race conditions.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "Darwin cmdline sourced exclusively from `KERN_PROCARGS2` (kernel-authoritative), with explicit rejection of `ps`-based fallback for ownership decisions. This closes the argv[0] spoofing vector.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "DSN hardening (`allowAllFiles=false`, `interpolateParams=false`, explicit timeouts) prevents the MySQL driver from being used as an SSRF or file-read vector against a malicious listener.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/persist.go (planned)",
+      "finding": "TOCTOU gap on Darwin/Windows atomic rename is acknowledged but insufficiently mitigated",
+      "suggestion": "On Darwin, use `renamex_np(RENAME_EXCL)` (available since macOS 10.12) as the equivalent of Linux's `RENAME_NOREPLACE`, falling back to Lstat+Rename only on older kernels. This narrows the window to the same bound as Linux. Document the residual race on Windows as a known limitation bounded by the same-UID trust assumption.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Exploitable only by a same-UID adversary who can win a tight race on the PID-file path, which the plan already declares as outside the trust boundary — but tightening it is cheap.",
+      "confidence_score": 0.65,
+      "scope": "in-diff",
+      "scope_rationale": "This is new code being introduced by this change."
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go (planned IdentityResolver)",
+      "finding": "`io.LimitReader` 64KB cap on shellout output sets `Truncated=true` but the plan doesn't specify what happens to the *partial parse* before truncation is detected",
+      "suggestion": "Ensure `parseDoltSQLServerDataDir` is called ONLY after confirming `Truncated == false`. If the implementation parses argv first and checks truncation second, a crafted process with a 64KB+ cmdline could place `--data-dir=\u003cbd-data-dir\u003e` in the first 64KB and the real `--data-dir=\u003cattacker-dir\u003e` after the cut, causing a false ownership match. The check order must be: read → check truncation → parse. Add a test with a 65KB cmdline where the last `--data-dir` (which wins) is beyond the cap.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "If parse-before-truncation-check is implemented, an attacker running as the same UID could craft a process that passes the ownership predicate, leading to PID-file takeover (silent adoption of an adversary-controlled process).",
+      "confidence_score": 0.85,
+      "scope": "in-diff",
+      "scope_rationale": "This is new parsing logic being introduced."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go (planned checkOwnership)",
+      "finding": "The plan specifies UID comparison uses real UID but doesn't specify constant-time comparison",
+      "suggestion": "Integer UID comparison is inherently constant-time (`==` on `int`), so this is fine — but document it explicitly in a code comment to prevent a future refactor from switching to string-based UID comparison (e.g., on Windows SID strings) without using `subtle.ConstantTimeCompare`. Windows SID comparison should use `EqualSid()` API, not string equality.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Timing side-channels on local UID comparison are not practically exploitable, but the Windows SID path could introduce one if not handled carefully.",
+      "confidence_score": 0.55,
+      "scope": "in-diff",
+      "scope_rationale": "New ownership comparison logic."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go (planned SQLProber)",
+      "finding": "The SQL probe connects to an untrusted listener — plan should specify TLS verification posture",
+      "suggestion": "Explicitly set `tls=false` or `tls=skip-verify` in the DSN and document that the SQL probe is a liveness check only, not a trust establishment. If the probe were to negotiate TLS with a malicious listener presenting a crafted certificate, and Go's `crypto/tls` had a parsing vulnerability, the probe could be an attack surface. Making TLS opt-out explicit removes ambiguity.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "The probe targets localhost, and TLS negotiation bugs in Go's standard library are rare but not unprecedented; explicit TLS=false eliminates the class entirely.",
+      "confidence_score": 0.5,
+      "scope": "in-diff",
+      "scope_rationale": "New network connection to potentially untrusted listener."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover_windows.go (planned)",
+      "finding": "Windows `Get-CimInstance` output parsing for ProcessIdentity lacks specification of encoding/locale handling",
+      "suggestion": "Pin PowerShell output to UTF-8 via `[Console]::OutputEncoding = [Text.Encoding]::UTF8` or use `-OutputFormat XML` with structured parsing. Locale-dependent output (e.g., localized field names in `wmic`) could cause silent parse failures that bypass identity resolution, degrading to `Owned=false` (safe) but potentially causing persistent recovery failures on non-English Windows systems.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Fails safe (Owned=false) but could cause the feature to be non-functional on a class of systems, which is a correctness issue more than a security one.",
+      "confidence_score": 0.6,
+      "scope": "in-diff",
+      "scope_rationale": "New platform-specific code."
+    }
+  ],
+  "action_items": [
+    {
+      "title": "Public JSON contract is tightly coupled to internal recovery enums, which risks long-term schema lock-in and cross-layer leakage",
+      "description": "Introduce a thin API-mapping layer (`internal reason -\u003e public reason code`) and treat JSON reason codes as a separately versioned contract; keep internal enum free to evolve without forcing backward-compat commitments on implementation details.",
+      "priority": 1,
+      "role": "architect"
+    },
+    {
+      "title": "The config-resolution architecture is still over-complicated and risks hidden dependency drift between CLI and internal callers",
+      "description": "Define one canonical `RecoverParamsProvider` interface in `internal/doltserver` and provide a single implementation in `internal/configadapter`; have both `cmd/bd` and internal paths depend on that interface instead of mixing “cmd helper + internal adapter” narrative. This reduces ambiguity and prevents future shotgun surgery when config precedence changes.",
+      "priority": 1,
+      "role": "architect"
+    },
+    {
+      "title": "`ResolveAndHealState` is intentionally side-effecting, but using it in `status` still creates command-query tension and cognitive overhead",
+      "description": "Keep current behavior, but codify a strict rule: status may heal only PID/port metadata, never process state. Add a dedicated test name and doc invariant for this to prevent future behavior creep.",
+      "priority": 2,
+      "role": "architect"
+    },
+    {
+      "title": "The plan’s module depth is good, but `Recoverer` is close to becoming a “policy + orchestration + platform coordination” hub",
+      "description": "Extract ownership policy into a small `OwnershipEvaluator` (pure) and keep `Recoverer` as orchestration only. This lowers RFC/CBO pressure and keeps extensibility cleaner if new ownership signals are added.",
+      "priority": 2,
+      "role": "architect"
+    },
+    {
+      "title": "Single-PR delivery is defensible, but review risk is still high for a cross-platform lifecycle change",
+      "description": "Keep single PR default, but predefine explicit split trigger criteria (e.g., unresolved review \u003e N days or Windows-specific churn \u003e M comments) and prepared fallback branches to reduce integration risk without changing architectural intent.",
+      "priority": 2,
+      "role": "architect"
+    },
+    {
+      "title": "Add explicit “non-regression matrix” acceptance bullets for unaffected modes",
+      "description": "Add 3-4 explicit checks that embedded mode, non-shared local mode, and existing remote-host external-server status behavior remain unchanged (exit codes + JSON shape). This reduces change-failure risk by making “what must not change” first-class.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Add rollout/abort criteria tied to DORA + SPACE",
+      "description": "Define post-merge success thresholds (e.g., median recovery-to-success time, rate of `stop.refused_unowned`, and support incidents for shared-server start/stop). Include a rollback trigger if refusal/error rates spike. This strengthens restore-time and productivity validation.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Consider delivery slicing fallback if review stalls",
+      "description": "Keep single-PR as default, but predefine a contingency split (core Linux/Darwin recovery contract first, Windows fallback second) if review latency exceeds a threshold. This preserves purpose while reducing lead-time risk.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Reduce cognitive load with a short maintainer “operational invariants” appendix",
+      "description": "Add a concise invariant list (“never signal unowned PID”, “stdout JSON never polluted”, “persist failure is non-fatal for stop”) and map each to test names. This improves onboarding and long-term maintainability.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Legacy PID revalidation can break healthy running servers if the old bd-spawned process lacks `--data-dir`",
+      "description": "Before making legacy `IsRunning` success require the new full ownership predicate, explicitly confirm current released `Start()` always included `--data-dir`. If not, treat legacy PID-file success as trusted legacy state, and apply full ownership only to recovery/stop paths where the PID file is missing or stale.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "The plan has contradictory Darwin identity details",
+      "description": "Remove all remaining `ps`/`lsof -F a` cmdline fallback language for Darwin, or explicitly define when fallback is allowed. The later section says “No `ps` cmdline fallback — ever,” but earlier fields/tests still describe `ps` fallback and `CmdLineSource == \"ps\"`.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "`PersistOwnedState` signature and `PersistResult` design disagree",
+      "description": "Change the planned API to one canonical signature, likely `func PersistOwnedState(beadsDir string, rs *RecoveredState) PersistResult`, and update all callers/tests to use that shape.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "`StopFromRecovery` naming is inconsistent across the plan and tests",
+      "description": "Rename the test and all prose to the same API name, `StopFromRecovery`, before implementation.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "Linux host matching still risks false positives for non-local configured hosts",
+      "description": "Specify exact host equivalence rules for configured non-local addresses. Wildcard listeners can match a local target, but a listener bound only to `127.0.0.1` should not satisfy a configured external host, and vice versa.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "The `sql-server` argv-position rule is under-specified for valid Dolt global flags",
+      "description": "Define whether `dolt --flag value sql-server ...` is accepted. If bd never emits global flags, document that the recovery predicate only promises to recover bd’s exact Start argv shape.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "`EnsureRunning` wiring crosses package boundaries in a confusing way",
+      "description": "Clarify the actual package dependency graph. If `internal/doltserver` calls `internal/configadapter`, say so directly and ensure `configadapter` does not import `doltserver`; otherwise keep all config resolution at CLI/caller boundaries.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "No test explicitly covers unknown future `StateSource` handling",
+      "description": "Add default branches in status/stop/start that return an internal error for unknown `StateSource`, plus a small unit test if feasible.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "The plan estimates ~500 LOC, but the described behavior is closer to a high-complexity platform feature",
+      "description": "Either slice implementation by platform behind stable interfaces or raise the estimate/reviewer plan. Per-platform process inspection, JSON compatibility, PID persistence hardening, CLI behavior, and integration tests are multiple risk surfaces.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "TOCTOU gap on Darwin/Windows atomic rename is acknowledged but insufficiently mitigated",
+      "description": "On Darwin, use `renamex_np(RENAME_EXCL)` (available since macOS 10.12) as the equivalent of Linux's `RENAME_NOREPLACE`, falling back to Lstat+Rename only on older kernels. This narrows the window to the same bound as Linux. Document the residual race on Windows as a known limitation bounded by the same-UID trust assumption.",
+      "priority": 1,
+      "role": "security"
+    },
+    {
+      "title": "`io.LimitReader` 64KB cap on shellout output sets `Truncated=true` but the plan doesn't specify what happens to the *partial parse* before truncation is detected",
+      "description": "Ensure `parseDoltSQLServerDataDir` is called ONLY after confirming `Truncated == false`. If the implementation parses argv first and checks truncation second, a crafted process with a 64KB+ cmdline could place `--data-dir=\u003cbd-data-dir\u003e` in the first 64KB and the real `--data-dir=\u003cattacker-dir\u003e` after the cut, causing a false ownership match. The check order must be: read → check truncation → parse. Add a test with a 65KB cmdline where the last `--data-dir` (which wins) is beyond the cap.",
+      "priority": 1,
+      "role": "security"
+    },
+    {
+      "title": "The plan specifies UID comparison uses real UID but doesn't specify constant-time comparison",
+      "description": "Integer UID comparison is inherently constant-time (`==` on `int`), so this is fine — but document it explicitly in a code comment to prevent a future refactor from switching to string-based UID comparison (e.g., on Windows SID strings) without using `subtle.ConstantTimeCompare`. Windows SID comparison should use `EqualSid()` API, not string equality.",
+      "priority": 2,
+      "role": "security"
+    },
+    {
+      "title": "The SQL probe connects to an untrusted listener — plan should specify TLS verification posture",
+      "description": "Explicitly set `tls=false` or `tls=skip-verify` in the DSN and document that the SQL probe is a liveness check only, not a trust establishment. If the probe were to negotiate TLS with a malicious listener presenting a crafted certificate, and Go's `crypto/tls` had a parsing vulnerability, the probe could be an attack surface. Making TLS opt-out explicit removes ambiguity.",
+      "priority": 2,
+      "role": "security"
+    },
+    {
+      "title": "Windows `Get-CimInstance` output parsing for ProcessIdentity lacks specification of encoding/locale handling",
+      "description": "Pin PowerShell output to UTF-8 via `[Console]::OutputEncoding = [Text.Encoding]::UTF8` or use `-OutputFormat XML` with structured parsing. Locale-dependent output (e.g., localized field names in `wmic`) could cause silent parse failures that bypass identity resolution, degrading to `Owned=false` (safe) but potentially causing persistent recovery failures on non-English Windows systems.",
+      "priority": 2,
+      "role": "security"
+    }
+  ],
+  "cross_model_analysis": {
+    "high_confidence": null,
+    "medium_confidence": null,
+    "low_confidence": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39
+    ],
+    "model_agreement_rate": 0,
+    "distinct_providers": 4
+  },
+  "turns": [
+    {
+      "seq": 1,
+      "round": 1,
+      "role": "critic",
+      "timestamp": "2026-05-08T18:18:01Z",
+      "tags": [
+        "[BLOCKER]"
+      ],
+      "content": "[BLOCKER] Legacy PID revalidation can break healthy running servers if the old bd-spawned process lacks `--data-dir`\n  location: plan.md, “ResolveAndHealState composability” / “Start invariant”\n  category: correctness\n  suggestion: Before making legacy `IsRunning` success require the new full ownership predicate, explicitly confirm current released `Start()` always included `--data-dir`. If not, treat legacy PID-file success as trusted legacy state, and apply full ownership only to recovery/stop paths where the PID file is missing or stale.\n  confidence: medium\n  confidence_score: 0.72\n  severity_rationale: This could turn a previously working server into `unowned` after upgrade, blocking status/start/stop despite a valid PID file.\n  scope: in-diff\n  scope_rationale: The proposed plan adds stricter validation to an existing successful path.\n\n[ISSUE] The plan has contradictory Darwin identity details\n  location: plan.md, “Identity resolution” and “ProcessIdentity”\n  category: correctness\n  suggestion: Remove all remaining `ps`/`lsof -F a` cmdline fallback language for Darwin, or explicitly define when fallback is allowed. The later section says “No `ps` cmdline fallback — ever,” but earlier fields/tests still describe `ps` fallback and `CmdLineSource == \"ps\"`.\n  confidence: high\n  confidence_score: 0.88\n  severity_rationale: Contradictory identity-source rules will produce divergent implementations and tests for a core ownership predicate.\n  scope: in-diff\n  scope_rationale: The inconsistency is inside the proposed design contract.\n\n[ISSUE] `PersistOwnedState` signature and `PersistResult` design disagree\n  location: plan.md, Layer 1 `PersistOwnedState`; Layer 1b `PersistResult`\n  category: correctness\n  suggestion: Change the planned API to one canonical signature, likely `func PersistOwnedState(beadsDir string, rs *RecoveredState) PersistResult`, and update all callers/tests to use that shape.\n  confidence: high\n  confidence_score: 0.9\n  severity_rationale: This is a direct contract mismatch that will cause implementation drift or compile churn.\n  scope: in-diff\n  scope_rationale: Both incompatible contracts are introduced by the plan.\n\n[ISSUE] `StopFromRecovery` naming is inconsistent across the plan and tests\n  location: plan.md, `StopFromRecovery` API and `TestRecoverer_StopRecoveredState_RevalidatesIdentity`\n  category: completeness\n  suggestion: Rename the test and all prose to the same API name, `StopFromRecovery`, before implementation.\n  confidence: high\n  confidence_score: 0.84\n  severity_rationale: This is not behavior-breaking by itself, but it is cheap evidence of contract drift in a high-risk path.\n  scope: in-diff\n  scope_rationale: The mismatch is in the new planned API/test names.\n  effort: trivial\n\n[ISSUE] Linux host matching still risks false positives for non-local configured hosts\n  location: plan.md, Linux `/proc` algorithm / `TestRecoverer_HostMatching`\n  category: correctness\n  suggestion: Specify exact host equivalence rules for configured non-local addresses. Wildcard listeners can match a local target, but a listener bound only to `127.0.0.1` should not satisfy a configured external host, and vice versa.\n  confidence: medium\n  confidence_score: 0.67\n  severity_rationale: Wrong host matching can recover or stop the wrong server when users configure non-default hosts.\n  scope: in-diff\n  scope_rationale: The new port lookup algorithm owns this matching behavior.\n\n[SUGGESTION] The `sql-server` argv-position rule is under-specified for valid Dolt global flags\n  location: plan.md, Ownership model signal 2\n  category: correctness\n  suggestion: Define whether `dolt --flag value sql-server ...` is accepted. If bd never emits global flags, document that the recovery predicate only promises to recover bd’s exact Start argv shape.\n  confidence: medium\n  confidence_score: 0.62\n  severity_rationale: Mostly a false-negative risk, not an unsafe false-positive, so it is below blocker severity.\n  scope: in-diff\n  scope_rationale: The new parser/ownership predicate defines the behavior.\n\n[ISSUE] `EnsureRunning` wiring crosses package boundaries in a confusing way\n  location: plan.md, “Architectural boundary preservation” / “Split-brain mitigation”\n  category: design\n  suggestion: Clarify the actual package dependency graph. If `internal/doltserver` calls `internal/configadapter`, say so directly and ensure `configadapter` does not import `doltserver`; otherwise keep all config resolution at CLI/caller boundaries.\n  confidence: medium\n  confidence_score: 0.7\n  severity_rationale: Ambiguous package ownership can create import cycles or hidden config coupling in a core startup path.\n  scope: in-diff\n  scope_rationale: The planned refactor introduces the adapter dependency.\n\n[SUGGESTION] No test explicitly covers unknown future `StateSource` handling\n  location: plan.md, Layer 3 command behavior contract\n  category: completeness\n  suggestion: Add default branches in status/stop/start that return an internal error for unknown `StateSource`, plus a small unit test if feasible.\n  confidence: medium\n  confidence_score: 0.66\n  severity_rationale: This prevents silent success on enum expansion; impact is future-proofing rather than current breakage.\n  scope: in-diff\n  scope_rationale: The new enum drives CLI behavior.\n  effort: small\n\n[SUGGESTION] The plan estimates ~500 LOC, but the described behavior is closer to a high-complexity platform feature\n  location: plan.md, Estimated effort\n  category: design\n  suggestion: Either slice implementation by platform behind stable interfaces or raise the estimate/reviewer plan. Per-platform process inspection, JSON compatibility, PID persistence hardening, CLI behavior, and integration tests are multiple risk surfaces.\n  confidence: high\n  confidence_score: 0.82\n  severity_rationale: Underestimating scope increases review risk, but the design can still ship if implemented carefully.\n  scope: system\n  scope_rationale: This is about delivery risk across the whole proposed change.\n\n[GOOD] The plan correctly separates “listener exists” from “bd owns this listener,” and refuses to stop unproven processes.\n\n[GOOD] Dependency injection for `PortLookup`, `IdentityResolver`, and `SQLProber` makes the hard failure modes testable without relying on live OS state.\n\n[GOOD] The command behavior table is a strong contract; it should prevent another asymmetric status/stop/start fix."
+    },
+    {
+      "seq": 2,
+      "round": 1,
+      "role": "strategist",
+      "timestamp": "2026-05-08T18:18:07Z",
+      "tags": [],
+      "content": "[GOOD] The plan is now strongly aligned to purpose: it fixes the actual operator pain (false “not running” + inability to stop/start), and does so symmetrically across `status`/`stop`/`start` and internal `EnsureRunning`, which directly addresses the prior “partial fix” failure mode.\n\n[GOOD] Completeness is notably improved: missing, malformed, unreadable, stale, reused PID, read-only PID-dir, and unowned-listener paths are all explicitly modeled with command-by-command behavior contracts and matching acceptance criteria.\n\n[GOOD] The approach follows sound information-hiding boundaries (Parnas): ownership logic is centralized in `Recoverer.checkOwnership`, state healing is isolated from CLI presentation, and config resolution is separated from lifecycle mechanics.\n\n[SUGGESTION] Add explicit “non-regression matrix” acceptance bullets for unaffected modes\n  location: `/tmp/3687-plan/plan.md`\n  category: completeness\n  suggestion: Add 3-4 explicit checks that embedded mode, non-shared local mode, and existing remote-host external-server status behavior remain unchanged (exit codes + JSON shape). This reduces change-failure risk by making “what must not change” first-class.\n  confidence: high\n\n[SUGGESTION] Add rollout/abort criteria tied to DORA + SPACE\n  location: `/tmp/3687-plan/plan.md`\n  category: design\n  suggestion: Define post-merge success thresholds (e.g., median recovery-to-success time, rate of `stop.refused_unowned`, and support incidents for shared-server start/stop). Include a rollback trigger if refusal/error rates spike. This strengthens restore-time and productivity validation.\n  confidence: medium\n\n[SUGGESTION] Consider delivery slicing fallback if review stalls\n  location: `/tmp/3687-plan/plan.md`\n  category: design\n  suggestion: Keep single-PR as default, but predefine a contingency split (core Linux/Darwin recovery contract first, Windows fallback second) if review latency exceeds a threshold. This preserves purpose while reducing lead-time risk.\n  confidence: medium\n\n[SUGGESTION] Reduce cognitive load with a short maintainer “operational invariants” appendix\n  location: `/tmp/3687-plan/plan.md`\n  category: completeness\n  suggestion: Add a concise invariant list (“never signal unowned PID”, “stdout JSON never polluted”, “persist failure is non-fatal for stop”) and map each to test names. This improves onboarding and long-term maintainability.\n  confidence: high\n\n[GOOD] Priority of effort is generally strong: most complexity is spent on safety-critical ownership proof and consistency, not on low-value polish.\n\nNo P0/P1 blockers remain from a strategy lens; remaining concerns are P2-level refinements suitable as follow-ups or minor pre-merge hardening."
+    },
+    {
+      "seq": 3,
+      "round": 1,
+      "role": "security",
+      "timestamp": "2026-05-08T18:18:14Z",
+      "tags": [],
+      "content": "\n\n## Security Review: PID-file Recovery Plan (GH#3687)\n\nThis plan is exceptionally well-thought-out from a security perspective. The council iteration process has addressed most concerns I would typically raise. My review focuses on residual risks and areas where implementation could still go wrong.\n\n---\n\n[GOOD] The five-signal ownership predicate (exe path, argv token-exact match, data-dir canonicalization, port binding, UID match) is a strong defense-in-depth design against silent process adoption. This directly addresses CWE-283 (Unverified Ownership).\n\n[GOOD] Argument-array `exec.Command` throughout, with integer-typed PID/port values, eliminates command injection vectors (CWE-78). The plan explicitly bans shell interpolation and tests enforce it.\n\n[GOOD] Atomic PID-file writes with `O_NOFOLLOW`, `O_EXCL`, temp+rename, mode 0600, and parent directory ownership verification is a textbook defense against symlink attacks (CWE-59) and race conditions.\n\n[GOOD] Darwin cmdline sourced exclusively from `KERN_PROCARGS2` (kernel-authoritative), with explicit rejection of `ps`-based fallback for ownership decisions. This closes the argv[0] spoofing vector.\n\n[GOOD] DSN hardening (`allowAllFiles=false`, `interpolateParams=false`, explicit timeouts) prevents the MySQL driver from being used as an SSRF or file-read vector against a malicious listener.\n\n---\n\n[ISSUE] TOCTOU gap on Darwin/Windows atomic rename is acknowledged but insufficiently mitigated\n  location: internal/doltserver/persist.go (planned)\n  category: security\n  suggestion: On Darwin, use `renamex_np(RENAME_EXCL)` (available since macOS 10.12) as the equivalent of Linux's `RENAME_NOREPLACE`, falling back to Lstat+Rename only on older kernels. This narrows the window to the same bound as Linux. Document the residual race on Windows as a known limitation bounded by the same-UID trust assumption.\n  confidence: medium\n  confidence_score: 0.65\n  severity_rationale: Exploitable only by a same-UID adversary who can win a tight race on the PID-file path, which the plan already declares as outside the trust boundary — but tightening it is cheap.\n  scope: in-diff\n  scope_rationale: This is new code being introduced by this change.\n\n[ISSUE] `io.LimitReader` 64KB cap on shellout output sets `Truncated=true` but the plan doesn't specify what happens to the *partial parse* before truncation is detected\n  location: internal/doltserver/recover.go (planned IdentityResolver)\n  category: security\n  suggestion: Ensure `parseDoltSQLServerDataDir` is called ONLY after confirming `Truncated == false`. If the implementation parses argv first and checks truncation second, a crafted process with a 64KB+ cmdline could place `--data-dir=\u003cbd-data-dir\u003e` in the first 64KB and the real `--data-dir=\u003cattacker-dir\u003e` after the cut, causing a false ownership match. The check order must be: read → check truncation → parse. Add a test with a 65KB cmdline where the last `--data-dir` (which wins) is beyond the cap.\n  confidence: high\n  confidence_score: 0.85\n  severity_rationale: If parse-before-truncation-check is implemented, an attacker running as the same UID could craft a process that passes the ownership predicate, leading to PID-file takeover (silent adoption of an adversary-controlled process).\n  scope: in-diff\n  scope_rationale: This is new parsing logic being introduced.\n\n[SUGGESTION] The plan specifies UID comparison uses real UID but doesn't specify constant-time comparison\n  location: internal/doltserver/recover.go (planned checkOwnership)\n  category: security\n  suggestion: Integer UID comparison is inherently constant-time (`==` on `int`), so this is fine — but document it explicitly in a code comment to prevent a future refactor from switching to string-based UID comparison (e.g., on Windows SID strings) without using `subtle.ConstantTimeCompare`. Windows SID comparison should use `EqualSid()` API, not string equality.\n  confidence: medium\n  confidence_score: 0.55\n  severity_rationale: Timing side-channels on local UID comparison are not practically exploitable, but the Windows SID path could introduce one if not handled carefully.\n  scope: in-diff\n  scope_rationale: New ownership comparison logic.\n\n[SUGGESTION] The SQL probe connects to an untrusted listener — plan should specify TLS verification posture\n  location: internal/doltserver/recover.go (planned SQLProber)\n  category: security\n  suggestion: Explicitly set `tls=false` or `tls=skip-verify` in the DSN and document that the SQL probe is a liveness check only, not a trust establishment. If the probe were to negotiate TLS with a malicious listener presenting a crafted certificate, and Go's `crypto/tls` had a parsing vulnerability, the probe could be an attack surface. Making TLS opt-out explicit removes ambiguity.\n  confidence: medium\n  confidence_score: 0.50\n  severity_rationale: The probe targets localhost, and TLS negotiation bugs in Go's standard library are rare but not unprecedented; explicit TLS=false eliminates the class entirely.\n  scope: in-diff\n  scope_rationale: New network connection to potentially untrusted listener.\n\n[SUGGESTION] Windows `Get-CimInstance` output parsing for ProcessIdentity lacks specification of encoding/locale handling\n  location: internal/doltserver/recover_windows.go (planned)\n  category: security\n  suggestion: Pin PowerShell output to UTF-8 via `[Console]::OutputEncoding = [Text.Encoding]::UTF8` or use `-OutputFormat XML` with structured parsing. Locale-dependent output (e.g., localized field names in `wmic`) could cause silent parse failures that bypass identity resolution, degrading to `Owned=false` (safe) but potentially causing persistent recovery failures on non-English Windows systems.\n  confidence: medium\n  confidence_score: 0.60\n  severity_rationale: Fails safe (Owned=false) but could cause the feature to be non-functional on a class of systems, which is a correctness issue more than a security one.\n  scope: in-diff\n  scope_rationale: New platform-specific code.\n\n---\n\n**Overall assessment**: No blockers. The plan is security-mature — the multi-round council process has addressed the critical issues (process adoption without ownership proof, command injection, symlink attacks, argv spoofing). The two [ISSUE] findings are implementation-order concerns that need explicit attention during coding but don't block the design. Ship it."
+    },
+    {
+      "seq": 4,
+      "round": 1,
+      "role": "architect",
+      "timestamp": "2026-05-08T18:21:02Z",
+      "tags": [],
+      "content": "[ISSUE] Public JSON contract is tightly coupled to internal recovery enums, which risks long-term schema lock-in and cross-layer leakage  \n  location: `/tmp/3687-plan/plan.md` (sections: “JSON shape compatibility”, `OwnershipReason` enum)  \n  category: design  \n  suggestion: Introduce a thin API-mapping layer (`internal reason -\u003e public reason code`) and treat JSON reason codes as a separately versioned contract; keep internal enum free to evolve without forcing backward-compat commitments on implementation details.  \n  confidence: high\n\n[ISSUE] The config-resolution architecture is still over-complicated and risks hidden dependency drift between CLI and internal callers  \n  location: `/tmp/3687-plan/plan.md` (sections: “Architectural boundary preservation”, “Split-brain mitigation”)  \n  category: design  \n  suggestion: Define one canonical `RecoverParamsProvider` interface in `internal/doltserver` and provide a single implementation in `internal/configadapter`; have both `cmd/bd` and internal paths depend on that interface instead of mixing “cmd helper + internal adapter” narrative. This reduces ambiguity and prevents future shotgun surgery when config precedence changes.  \n  confidence: medium\n\n[SUGGESTION] `ResolveAndHealState` is intentionally side-effecting, but using it in `status` still creates command-query tension and cognitive overhead  \n  location: `/tmp/3687-plan/plan.md` (sections: “ResolveAndHealState”, Layer 3 `dolt status`)  \n  category: design  \n  suggestion: Keep current behavior, but codify a strict rule: status may heal only PID/port metadata, never process state. Add a dedicated test name and doc invariant for this to prevent future behavior creep.  \n  confidence: high\n\n[SUGGESTION] The plan’s module depth is good, but `Recoverer` is close to becoming a “policy + orchestration + platform coordination” hub  \n  location: `/tmp/3687-plan/plan.md` (Layer 1 `recover.go`)  \n  category: design  \n  suggestion: Extract ownership policy into a small `OwnershipEvaluator` (pure) and keep `Recoverer` as orchestration only. This lowers RFC/CBO pressure and keeps extensibility cleaner if new ownership signals are added.  \n  confidence: medium\n\n[SUGGESTION] Single-PR delivery is defensible, but review risk is still high for a cross-platform lifecycle change  \n  location: `/tmp/3687-plan/plan.md` (section: “Delivery slicing decision”)  \n  category: completeness  \n  suggestion: Keep single PR default, but predefine explicit split trigger criteria (e.g., unresolved review \u003e N days or Windows-specific churn \u003e M comments) and prepared fallback branches to reduce integration risk without changing architectural intent.  \n  confidence: medium\n\n[GOOD] Strong structural decomposition: Layer 1 (recovery), Layer 2 (state orchestration), Layer 3 (CLI behavior contract) gives clear responsibility boundaries and avoids a god-object CLI command.\n\n[GOOD] Excellent abstraction discipline: `PortLookup`, `IdentityResolver`, and `SQLProber` isolate platform and IO volatility behind DI seams, improving testability and reducing concrete coupling.\n\n[GOOD] Information hiding is materially improved: ownership predicate is centralized and reused for recovery + stop revalidation, which minimizes drift and aligns with stable-abstractions principles.\n\n[GOOD] The explicit `StateSource` + `RecoveryOutcome` model is a solid anti-ambiguity move; it prevents boolean-smell APIs and keeps legacy `State` semantics intact.\n\n[GOOD] Safety-critical invariants are first-class (never stop unowned, stdout/stderr discipline, best-effort persistence), with tests mapped to behavior contract rows—this is architecturally mature for an operational bug fix.\n\nNo P0/P1 architectural blockers remain from this review. Remaining concerns are P2-level design hardening and contract hygiene, acceptable to ship with follow-up discipline."
+    }
+  ],
+  "metadata": {
+    "target": "/tmp/3687-plan/plan.md",
+    "review_type": "plan",
+    "rounds": 1,
+    "duration": "6m0.001s",
+    "duration_ms": 360001,
+    "members": [
+      "architect",
+      "strategist",
+      "critic",
+      "security",
+      "synthesizer"
+    ],
+    "providers": {
+      "architect": "gemini",
+      "critic": "codex",
+      "security": "opencode",
+      "strategist": "cursor",
+      "synthesizer": "copilot"
+    },
+    "agent_errors": {
+      "synthesizer": "context deadline exceeded (tried: copilot[transient]; copilot[transient]; gemini[transient])"
+    },
+    "created_at": "2026-05-08T11:17:25.473916-07:00",
+    "dialogue": {
+      "round": 1,
+      "total_messages": 4,
+      "round_messages": 4,
+      "degraded": false,
+      "effective_max_rounds": 1,
+      "round_durations": [
+        {
+          "round": 1,
+          "duration_ms": 359997,
+          "messages": 4
+        }
+      ]
+    }
+  },
+  "degraded": true
+}

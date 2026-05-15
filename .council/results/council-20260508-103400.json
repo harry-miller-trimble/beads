@@ -1,0 +1,684 @@
+{
+  "schema_version": "1.0",
+  "session_id": "council-20260508-103400",
+  "verdict": "Request Changes",
+  "confidence": "high",
+  "summary": "The plan introduces a well-structured approach with good layering to resolve PID-file false-negatives in shared-server mode. However, several critical security and correctness concerns, particularly around robust process ownership validation, secure handling of external command execution, and ensuring the reliability of `bd dolt stop` under PID-file rewrite failures, necessitate significant revisions before approval.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover_darwin.go",
+      "finding": "Command injection via unsanitized port/host in shell-out to `lsof`",
+      "suggestion": "Validate that `port` is strictly numeric (integer parse) and `host` is a valid IP/hostname before interpolating into the `lsof` command string. Use `exec.Command(\"lsof\", \"-nPiTCP:\"+port, \"-sTCP:LISTEN\", \"-t\")` with args array, never shell interpolation. Reject ports outside 1-65535.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "If port/host values come from a user-editable config file, a crafted value like `3308 -c /bin/sh` could inject arguments; using exec arg array mitigates but explicit validation is still needed.",
+      "confidence_score": 0.75,
+      "scope": "in-diff",
+      "scope_rationale": "The plan specifies shelling out to lsof with the configured port value."
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go",
+      "finding": "PID-file rewrite without atomic rename allows race to symlink attack",
+      "suggestion": "Write to a temp file in the same directory then `os.Rename` atomically. Set restrictive permissions (0600) on the temp file before rename. Verify the target path is not a symlink before writing (or use `O_NOFOLLOW` semantics).",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "A local attacker could symlink the PID file path to a sensitive file; the write would overwrite it with a numeric PID. Low impact content but arbitrary file truncation is possible.",
+      "confidence_score": 0.6,
+      "scope": "in-diff",
+      "scope_rationale": "The plan introduces PID-file rewrite as a new operation."
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go",
+      "finding": "Process ownership validation (`isDoltProcess`) may be bypassable via process name spoofing",
+      "suggestion": "Beyond checking process name, verify the process's executable path resolves to a known `dolt` binary (e.g., compare against `exec.LookPath(\"dolt\")`). Document that this is a best-effort heuristic, not a security boundary.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "A local attacker naming their process \"dolt\" could trick bd into sending SIGTERM to it or writing a PID file pointing to it; impact is limited to local DoS since bd only signals the process.",
+      "confidence_score": 0.55,
+      "scope": "adjacent",
+      "scope_rationale": "isDoltProcess is existing code; the plan relies on it as a trust gate without strengthening it."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover.go",
+      "finding": "Bind the SQL probe DSN to localhost explicitly to prevent SSRF-like misuse",
+      "suggestion": "In shared-server mode the plan should assert `host == \"127.0.0.1\" || host == \"localhost\" || host == \"::1\"` before probing. If config somehow points to a remote host, skip recovery (that path is already handled by the remote-host code). This prevents the recovery probe from being used to port-scan arbitrary hosts via a malicious config.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Without this guard, a poisoned config file could cause bd to probe arbitrary network endpoints; impact is information disclosure (port open/closed) not RCE.",
+      "confidence_score": 0.65,
+      "scope": "in-diff",
+      "scope_rationale": "The plan introduces a new network probe without explicit host restriction."
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "security",
+      "location": "internal/doltserver/recover_windows.go",
+      "finding": "Windows `netstat -ano` output parsing should be hardened against locale variations",
+      "suggestion": "Pin the codepage via `cmd /c chcp 437 \u0026\u0026 netstat -ano -p TCP` or parse by column offsets rather than whitespace splitting. Malformed output should result in `(nil, nil)` not a panic or misidentified PID.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Incorrect parsing could associate the wrong PID with the port, causing bd to signal an unrelated process; local DoS only.",
+      "confidence_score": 0.5,
+      "scope": "in-diff",
+      "scope_rationale": "Plan specifies Windows netstat parsing as new code."
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "Recovery is never wired into `KillStaleServers` — preserves the safety invariant that bd won't kill externally-started servers without explicit PID-file evidence.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "No new external dependencies; no widening of the driver interface. Minimizes supply-chain and boundary-creep risk.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "role": "security",
+      "finding": "The 2s/3s timeouts on SQL probe and lsof prevent the recovery path from becoming a hang vector (DoS against the CLI).",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Strict adherence to the established architectural boundary by explicitly refusing engine introspection and handling process lifecycle entirely on the BD side.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "design",
+      "role": "architect",
+      "finding": "Excellent symmetric application of the fix across `start`, `stop`, and `status` commands, avoiding ad-hoc patchwork and ensuring consistent state handling.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "architect",
+      "location": "internal/doltserver/recover.go",
+      "finding": "Tight coupling between `doltserver` and `configfile` parsing logic.",
+      "suggestion": "Pass the resolved port/host into `RecoverState` and `IsRunningWithRecovery` from the command layer (Layer 3), rather than having `doltserver` call `configfile.Load`. The CLI layer already knows or can resolve the configuration. Pushing config-parsing down into the domain layer violates the Single Responsibility Principle and unnecessarily couples the server lifecycle management to the configuration file format.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "architect",
+      "location": "internal/doltserver/recover.go",
+      "finding": "Package-level variable injection seam for testing introduces global state and test fragility.",
+      "suggestion": "Avoid using global `var lookupFunc = ...` for stubbing. This is an anti-pattern that leads to test pollution and prevents safe parallel test execution (`t.Parallel()`). Instead, define an interface (e.g., `type PortResolver interface`) and inject it into a state-recovery struct, or use standard build-tag substitution if it strictly follows OS boundaries.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "architect",
+      "location": "internal/doltserver/doltserver.go",
+      "finding": "Hidden side-effects violate Command-Query Separation (CQS).",
+      "suggestion": "`IsRunningWithRecovery` sounds like a pure predicate (query), but it mutates the filesystem by writing a PID file (command). Rename the function to explicitly convey the side effect (e.g., `RecoverTrackingAndCheckRunning` or `EnsureTrackedState`) so callers are aware it is not safe to call if filesystem mutations are undesirable.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "security",
+      "role": "architect",
+      "location": "internal/doltserver/recover_darwin.go",
+      "finding": "Shelling out to `lsof` and `netstat` introduces structural fragility and potential injection vectors.",
+      "suggestion": "Ensure the `port` variable passed into the shell commands is strictly strongly-typed as an `int` (not a string) throughout the internal call chain before formatting it into the `lsof` or `netstat` arguments. This guarantees structural immunity to argument injection, even if the port ultimately originates from configuration.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "critical",
+      "category": "correctness",
+      "role": "critic",
+      "location": "Design / Layer 1 and Layer 3",
+      "finding": "Recovery can silently take ownership of an externally started `dolt sql-server`",
+      "suggestion": "Add an ownership check beyond “process is dolt”: verify command line, working directory, configured data dir, socket/port file provenance, or another bd-owned marker before rewriting the PID file or allowing `bd dolt stop` to kill it. If ownership cannot be proven, recover status only and refuse stop/start takeover.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This can make `bd dolt stop` kill a user-managed Dolt server, which is exactly the safety class the existing PID-file contract avoids.",
+      "confidence_score": 0.88,
+      "scope": "in-diff",
+      "scope_rationale": "The planned recovery logic changes the ownership decision for missing-PID cases."
+    },
+    {
+      "severity": "critical",
+      "category": "correctness",
+      "role": "critic",
+      "location": "`internal/doltserver/recover_linux.go`",
+      "finding": "Linux port-to-PID design is incomplete as stated",
+      "suggestion": "Specify and test the full `/proc` algorithm: map listening socket inode from `/proc/net/tcp{,6}` to `/proc/\u003cpid\u003e/fd/*` symlinks, handle permission-denied entries, IPv4-mapped IPv6, loopback vs wildcard binds, and multiple matches deterministically.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "`/proc/net/tcp` alone does not contain PIDs; an incomplete implementation would fail recovery on Linux, likely the most important CI/server platform.",
+      "confidence_score": 0.84,
+      "scope": "in-diff",
+      "scope_rationale": "This is part of the new planned platform implementation."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "Layer 1 / Layer 3",
+      "finding": "`bd dolt stop` depends on PID-file rewrite succeeding, contradicting the best-effort write claim",
+      "suggestion": "Either make `StopWithForce` accept the recovered `State` directly or add a recovery-aware stop path. Do not rely on a best-effort PID-file write when the plan says read-only PID dir should still allow stop/status in the current invocation.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "The stated acceptance criteria include stop working even when persistence fails, but the proposed call flow falls back into `StopWithForce`’s PID-file-only logic.",
+      "confidence_score": 0.9,
+      "scope": "in-diff",
+      "scope_rationale": "The inconsistency is introduced by the planned wiring."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "`IsRunningWithRecovery`",
+      "finding": "Recovery after a stale PID file is underspecified and may skip the needed path",
+      "suggestion": "Define precisely what `IsRunning` returns for stale, non-dolt, unreadable, or malformed PID files, and ensure `IsRunningWithRecovery` attempts recovery for all stale/non-running states, not only missing files.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "The problem statement includes stale PID files, but the algorithm is framed mostly around missing PID files; stale cases are common and user-visible.",
+      "confidence_score": 0.74,
+      "scope": "adjacent",
+      "scope_rationale": "It depends on existing `IsRunning` behavior but the new helper must handle it correctly."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "`RecoverState`",
+      "finding": "SQL ping as the first gate can reject valid recoverable servers for configuration/auth/TLS reasons",
+      "suggestion": "Treat connection errors by class: “connection refused/no listener” can mean no recovery; auth/TLS/protocol errors should not be collapsed into `(nil, nil)` if the port lookup and process validation can prove a Dolt SQL server is present. At minimum log/debug the reason.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Misclassifying permanent configuration mismatch as “not running” preserves the false-negative class this change is meant to fix.",
+      "confidence_score": 0.7,
+      "scope": "in-diff",
+      "scope_rationale": "The new recovery policy defines this error taxonomy."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "`lookupPIDForPort(host, port)`",
+      "finding": "Port-only lookup is ambiguous when the configured host is not the actual bind address",
+      "suggestion": "Specify matching rules for `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, and `::`; tests should cover wildcard bind and IPv6 loopback. Prefer matching by port plus listener state, then validating process and server identity.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "Host/bind mismatches are routine on localhost services and can make recovery fail despite a live server.",
+      "confidence_score": 0.82,
+      "scope": "in-diff",
+      "scope_rationale": "The new platform lookup API takes host/port but the plan only discusses port."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "Layer 1 / Layer 3",
+      "finding": "Race between recovery validation and later signal can kill the wrong process after PID reuse",
+      "suggestion": "Revalidate the PID immediately before signaling, or pass the recovered state into stop and verify command line/start time if available. Avoid writing a PID file and then trusting it later without freshness checks.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "The race window is small but the consequence is signaling an unrelated process.",
+      "confidence_score": 0.68,
+      "scope": "adjacent",
+      "scope_rationale": "The new recovery flow feeds existing stop semantics through a rewritten PID file."
+    },
+    {
+      "severity": "high",
+      "category": "correctness",
+      "role": "critic",
+      "location": "`RecoverState` and `bd dolt status`",
+      "finding": "Best-effort write warning to stderr may corrupt machine-readable output",
+      "suggestion": "Route warnings through the existing CLI diagnostic/logging path and suppress or structure them for JSON/status output modes. Add tests for JSON output if `bd dolt status` supports it.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Status output is described as observable automation behavior; unexpected stderr/stdout can break callers even if the command exits 0.",
+      "confidence_score": 0.72,
+      "scope": "in-diff",
+      "scope_rationale": "The warning behavior is explicitly introduced by the plan."
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "Test plan",
+      "finding": "Add a test for stale PID pointing at a live non-Dolt process",
+      "suggestion": "Create a PID file containing a PID for a harmless non-Dolt process while the real Dolt server is listening, then assert recovery replaces the stale PID only after validating the listener.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This is a cheap boundary test for the stated stale-PID goal and would catch wrong trust in the existing PID file.",
+      "confidence_score": 0.86,
+      "scope": "in-diff",
+      "scope_rationale": "It directly tests the new recovery branch.",
+      "metadata": {
+        "effort": "small"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "Test plan / integration tests",
+      "finding": "Add a test for PID-file write failure through the actual `bd dolt stop` path",
+      "suggestion": "The read-only PID-dir test should cover `bd dolt stop`, not only `RecoverState`, because the proposed stop wiring currently depends on the rewritten file.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This would expose a concrete acceptance-criteria mismatch with little extra test setup.",
+      "confidence_score": 0.9,
+      "scope": "in-diff",
+      "scope_rationale": "It validates the exact changed CLI behavior.",
+      "metadata": {
+        "effort": "small"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "Test plan",
+      "finding": "Add negative test for external Dolt server on the shared port",
+      "suggestion": "Start a `dolt sql-server` outside bd’s normal shared-server launcher, remove/avoid the PID file, and assert `bd dolt stop` does not claim or kill it unless ownership can be proven.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "severity_rationale": "This is the main safety regression risk and is testable with the same real-Dolt fixture.",
+      "confidence_score": 0.84,
+      "scope": "in-diff",
+      "scope_rationale": "The new recovery behavior changes this exact case.",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "Test plan",
+      "finding": "Add tests for host/address boundary cases",
+      "suggestion": "Cover `localhost`, `127.0.0.1`, `::1`, and wildcard listener behavior where supported; at minimum document skipped platform cases.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "Address matching bugs are easy to miss and can produce platform-specific false negatives.",
+      "confidence_score": 0.7,
+      "scope": "in-diff",
+      "scope_rationale": "The planned lookup function accepts host and port.",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "role": "critic",
+      "location": "Test plan / Manual repro verification",
+      "finding": "Do not preserve the manual repro only as a comment",
+      "suggestion": "Put the repro in `scripts/` or a skipped-by-default integration test helper. A comment is likely to rot and cannot be exercised by CI or maintainers.",
+      "confidence": "medium",
+      "model_confidence": "low",
+      "severity_rationale": "This is not a ship blocker, but executable repros catch regressions better than prose.",
+      "confidence_score": 0.64,
+      "scope": "in-diff",
+      "scope_rationale": "The plan adds this artifact as part of the change.",
+      "metadata": {
+        "effort": "small"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "correctness",
+      "role": "critic",
+      "finding": "The plan correctly keeps recovery out of `KillStaleServers`/`killall`; preserving that safety contract is essential.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "bug",
+      "role": "critic",
+      "finding": "The proposed split into recovery helper, recovery-aware status check, and narrow CLI call-site changes is appropriately scoped for this bug.",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "critical",
+      "category": "correctness",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Layer 1 best-effort PID write + Layer 3 stop flow)",
+      "finding": "`bd dolt stop` cannot reliably “work in current invocation” when PID rewrite fails, contradicting Goal #1 and the read-only mitigation narrative",
+      "suggestion": "In `doltStopCmd`, if recovery returns a live PID, stop that PID directly (or pass recovered state into `StopWithForce`) instead of depending on a successful PID-file rewrite; keep file rewrite as optimization, not prerequisite.",
+      "confidence": "high",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "design",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Layer 1 validation gate)",
+      "finding": "Recovered ownership check is too weak (`isDoltProcess(pid)` proves “dolt”, not “bd-managed shared server”), risking unintended takeover/stop of unrelated `dolt sql-server` on the same port",
+      "suggestion": "Add a second ownership signal before rewriting PID/allowing stop (e.g., command-line arg check for expected data dir/socket config, or a bd-written startup marker/token validated via process metadata); if ambiguous, report “reachable but not safely claimable” and do not adopt.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "high",
+      "category": "completeness",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Layer 1 platform strategy + integration test section)",
+      "finding": "Windows support story is internally inconsistent (design includes Windows lookup via `netstat`, but integration plan says “skip on Windows (no lsof)”)",
+      "suggestion": "Choose one explicit stance: (a) support Windows with tests using `netstat` path, or (b) declare unsupported and remove Windows implementation from scope for this PR.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "high",
+      "category": "completeness",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Goals #5, Acceptance criteria, Test plan)",
+      "finding": "“Friendly diagnostics when recovery isn’t possible” is a stated goal but not concretely specified or acceptance-tested",
+      "suggestion": "Add explicit acceptance criteria and tests for at least three user-facing outcomes: no listener, unsupported port→PID lookup, and non-dolt listener; define exact message shape for human and JSON modes.",
+      "confidence": "high",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "medium",
+      "category": "design",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Layer 2/3 command wiring)",
+      "finding": "Use a single “server state resolution” path to reduce drift and future complexity (Lehman L2 / Parnas information-hiding)",
+      "suggestion": "Introduce one internal resolver used by `status/start/stop` and optionally by stop internals, so fallback policy (PID-file → probe → adopt) is centralized and not split across command call-sites + `StopWithForce`.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "medium",
+      "category": "performance",
+      "role": "strategist",
+      "location": "`/tmp/3687-plan/plan.md` (Unit test `LiveSQLNonDolt`)",
+      "finding": "Rebalance test effort toward behavior-value over protocol emulation to improve delivery speed (Lean “eliminate waste”, DORA lead time)",
+      "suggestion": "Prefer dependency-injected seams for probe and PID-lookup classification over hand-rolled MySQL handshake stubs, then keep one or two high-value end-to-end tests with real `dolt`.",
+      "confidence": "medium",
+      "model_confidence": "low"
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "The plan is strongly purpose-aligned: it targets the exact user-facing failure loop (`status/stop/start`) and explicitly keeps `killall` safety semantics unchanged.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "The layering is strategically sound: recovery is isolated behind `doltserver` and avoids changing `IsRunning` contract, which minimizes regression blast radius.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    },
+    {
+      "severity": "info",
+      "category": "completeness",
+      "role": "strategist",
+      "finding": "Scope control is excellent (clear non-goals, no driver boundary violation, no dependency creep), which supports faster, safer delivery and better maintainability.",
+      "model_confidence": "low",
+      "metadata": {
+        "effort": "medium"
+      }
+    }
+  ],
+  "action_items": [
+    {
+      "title": "Harden shell-out commands against injection",
+      "description": "Validate that port is strictly numeric and host is a valid IP/hostname before interpolating into `lsof`/`netstat` commands. Use argument arrays with `exec.Command` and reject invalid port ranges.",
+      "priority": 1,
+      "role": "security"
+    },
+    {
+      "title": "Strengthen process ownership validation",
+      "description": "Beyond `isDoltProcess`, add a second ownership signal (e.g., command-line argument check for expected data dir/socket config, or a `bd`-written startup marker/token) before rewriting the PID file or allowing `bd dolt stop` to kill a process. If ownership is ambiguous, report 'reachable but not safely claimable'.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "Ensure `bd dolt stop` works when PID rewrite fails",
+      "description": "In `doltStopCmd`, if recovery returns a live PID, stop that PID directly (or pass the recovered state into `StopWithForce`) instead of depending on a successful PID-file rewrite. Keep PID file rewrite as an optimization, not a prerequisite for stopping.",
+      "priority": 1,
+      "role": "strategist"
+    },
+    {
+      "title": "Complete Linux port-to-PID lookup design",
+      "description": "Specify and test the full `/proc` algorithm for Linux. This includes mapping listening socket inodes from `/proc/net/tcp{,6}` to `/proc/\u003cpid\u003e/fd/*` symlinks, handling permission-denied entries, IPv4-mapped IPv6, loopback vs. wildcard binds, and deterministic handling of multiple matches.",
+      "priority": 1,
+      "role": "critic"
+    },
+    {
+      "title": "Implement atomic PID-file writes",
+      "description": "Write to a temporary file in the same directory, then use `os.Rename` atomically. Set restrictive permissions (0600) on the temp file before renaming. Verify the target path is not a symlink, or use `O_NOFOLLOW` semantics.",
+      "priority": 2,
+      "role": "security"
+    },
+    {
+      "title": "Improve `isDoltProcess` validation",
+      "description": "Beyond checking process name, verify the process's executable path resolves to a known `dolt` binary (e.g., compare against `exec.LookPath('dolt')`). Document this as a best-effort heuristic.",
+      "priority": 2,
+      "role": "security"
+    },
+    {
+      "title": "Refactor `doltserver` configuration parsing",
+      "description": "Pass the resolved port/host into `RecoverState` and `IsRunningWithRecovery` from the command layer (Layer 3), rather than having `doltserver` call `configfile.Load`. This decouples `doltserver` from configuration file format details.",
+      "priority": 2,
+      "role": "architect"
+    },
+    {
+      "title": "Eliminate global state for testing",
+      "description": "Avoid using package-level variables for stubbing the lookup function in tests. Instead, define an interface (e.g., `PortResolver`) and inject it into a state-recovery struct, allowing for safe parallel test execution.",
+      "priority": 2,
+      "role": "architect"
+    },
+    {
+      "title": "Clarify Windows support consistency",
+      "description": "Choose one explicit stance: either fully support Windows with tests using the `netstat` path, or explicitly declare it unsupported for this PR and remove the Windows implementation from scope.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Specify and test diagnostic output",
+      "description": "Add explicit acceptance criteria and tests for 'friendly diagnostics when recovery isn't possible'. Define the exact message shape for human and JSON output modes for scenarios like no listener, unsupported lookup, and non-dolt listener.",
+      "priority": 2,
+      "role": "strategist"
+    },
+    {
+      "title": "Address stale PID file recovery",
+      "description": "Define precisely what `IsRunning` returns for stale, non-dolt, unreadable, or malformed PID files, and ensure `IsRunningWithRecovery` attempts recovery for all such non-running states, not only missing files.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "Refine SQL ping error handling",
+      "description": "Treat connection errors by class: 'connection refused/no listener' can mean no recovery; auth/TLS/protocol errors should not be collapsed into `(nil, nil)` if port lookup and process validation prove a Dolt SQL server is present. Log the specific reason.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "Clarify host/address matching for port lookup",
+      "description": "Specify matching rules for `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, and `::`. Tests should cover wildcard binds and IPv6 loopback cases, prioritizing matching by port plus listener state, then validating process and server identity.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "Mitigate PID reuse race during signaling",
+      "description": "Revalidate the PID immediately before signaling, or pass the recovered state into stop and verify command line/start time if available. Avoid writing a PID file and then trusting it later without freshness checks.",
+      "priority": 2,
+      "role": "critic"
+    },
+    {
+      "title": "Route stderr warnings via logging path",
+      "description": "Route warnings from best-effort PID file writes through the existing CLI diagnostic/logging path and suppress or structure them for JSON/status output modes to prevent corruption of machine-readable output.",
+      "priority": 2,
+      "role": "critic"
+    }
+  ],
+  "cross_model_analysis": {
+    "high_confidence": null,
+    "medium_confidence": null,
+    "low_confidence": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37
+    ],
+    "model_agreement_rate": 0,
+    "distinct_providers": 4
+  },
+  "turns": [
+    {
+      "seq": 1,
+      "round": 1,
+      "role": "security",
+      "timestamp": "2026-05-08T17:34:33Z",
+      "tags": [],
+      "content": "## Security Review: PID-file Recovery Plan (GH#3687)\n\n[ISSUE] Command injection via unsanitized port/host in shell-out to `lsof`\n  location: internal/doltserver/recover_darwin.go\n  category: security\n  suggestion: Validate that `port` is strictly numeric (integer parse) and `host` is a valid IP/hostname before interpolating into the `lsof` command string. Use `exec.Command(\"lsof\", \"-nPiTCP:\"+port, \"-sTCP:LISTEN\", \"-t\")` with args array, never shell interpolation. Reject ports outside 1-65535.\n  confidence: high\n  confidence_score: 0.75\n  severity_rationale: If port/host values come from a user-editable config file, a crafted value like `3308 -c /bin/sh` could inject arguments; using exec arg array mitigates but explicit validation is still needed.\n  scope: in-diff\n  scope_rationale: The plan specifies shelling out to lsof with the configured port value.\n\n[ISSUE] PID-file rewrite without atomic rename allows race to symlink attack\n  location: internal/doltserver/recover.go\n  category: security\n  suggestion: Write to a temp file in the same directory then `os.Rename` atomically. Set restrictive permissions (0600) on the temp file before rename. Verify the target path is not a symlink before writing (or use `O_NOFOLLOW` semantics).\n  confidence: medium\n  confidence_score: 0.6\n  severity_rationale: A local attacker could symlink the PID file path to a sensitive file; the write would overwrite it with a numeric PID. Low impact content but arbitrary file truncation is possible.\n  scope: in-diff\n  scope_rationale: The plan introduces PID-file rewrite as a new operation.\n\n[ISSUE] Process ownership validation (`isDoltProcess`) may be bypassable via process name spoofing\n  location: internal/doltserver/recover.go\n  category: security\n  suggestion: Beyond checking process name, verify the process's executable path resolves to a known `dolt` binary (e.g., compare against `exec.LookPath(\"dolt\")`). Document that this is a best-effort heuristic, not a security boundary.\n  confidence: medium\n  confidence_score: 0.55\n  severity_rationale: A local attacker naming their process \"dolt\" could trick bd into sending SIGTERM to it or writing a PID file pointing to it; impact is limited to local DoS since bd only signals the process.\n  scope: adjacent\n  scope_rationale: isDoltProcess is existing code; the plan relies on it as a trust gate without strengthening it.\n\n[SUGGESTION] Bind the SQL probe DSN to localhost explicitly to prevent SSRF-like misuse\n  location: internal/doltserver/recover.go\n  category: security\n  suggestion: In shared-server mode the plan should assert `host == \"127.0.0.1\" || host == \"localhost\" || host == \"::1\"` before probing. If config somehow points to a remote host, skip recovery (that path is already handled by the remote-host code). This prevents the recovery probe from being used to port-scan arbitrary hosts via a malicious config.\n  confidence: medium\n  confidence_score: 0.65\n  severity_rationale: Without this guard, a poisoned config file could cause bd to probe arbitrary network endpoints; impact is information disclosure (port open/closed) not RCE.\n  scope: in-diff\n  scope_rationale: The plan introduces a new network probe without explicit host restriction.\n\n[SUGGESTION] Windows `netstat -ano` output parsing should be hardened against locale variations\n  location: internal/doltserver/recover_windows.go\n  category: security\n  suggestion: Pin the codepage via `cmd /c chcp 437 \u0026\u0026 netstat -ano -p TCP` or parse by column offsets rather than whitespace splitting. Malformed output should result in `(nil, nil)` not a panic or misidentified PID.\n  confidence: medium\n  confidence_score: 0.5\n  severity_rationale: Incorrect parsing could associate the wrong PID with the port, causing bd to signal an unrelated process; local DoS only.\n  scope: in-diff\n  scope_rationale: Plan specifies Windows netstat parsing as new code.\n\n[GOOD] Recovery is never wired into `KillStaleServers` — preserves the safety invariant that bd won't kill externally-started servers without explicit PID-file evidence.\n\n[GOOD] No new external dependencies; no widening of the driver interface. Minimizes supply-chain and boundary-creep risk.\n\n[GOOD] The 2s/3s timeouts on SQL probe and lsof prevent the recovery path from becoming a hang vector (DoS against the CLI).\n\n---\n\n**Summary**: No blockers. The main actionable items are (1) ensuring the `lsof`/`netstat` shell-outs use arg arrays with validated inputs rather than string interpolation, (2) atomic PID-file writes with symlink protection, and (3) restricting the SQL probe to loopback addresses in shared-server mode. All are straightforward to address during implementation."
+    },
+    {
+      "seq": 2,
+      "round": 1,
+      "role": "architect",
+      "timestamp": "2026-05-08T17:34:44Z",
+      "tags": [],
+      "content": "[GOOD] Strict adherence to the established architectural boundary by explicitly refusing engine introspection and handling process lifecycle entirely on the BD side.\n\n[GOOD] Excellent symmetric application of the fix across `start`, `stop`, and `status` commands, avoiding ad-hoc patchwork and ensuring consistent state handling.\n\n[ISSUE] Tight coupling between `doltserver` and `configfile` parsing logic.\n  location: internal/doltserver/recover.go\n  category: design\n  suggestion: Pass the resolved port/host into `RecoverState` and `IsRunningWithRecovery` from the command layer (Layer 3), rather than having `doltserver` call `configfile.Load`. The CLI layer already knows or can resolve the configuration. Pushing config-parsing down into the domain layer violates the Single Responsibility Principle and unnecessarily couples the server lifecycle management to the configuration file format.\n  confidence: high\n\n[ISSUE] Package-level variable injection seam for testing introduces global state and test fragility.\n  location: internal/doltserver/recover.go\n  category: design\n  suggestion: Avoid using global `var lookupFunc = ...` for stubbing. This is an anti-pattern that leads to test pollution and prevents safe parallel test execution (`t.Parallel()`). Instead, define an interface (e.g., `type PortResolver interface`) and inject it into a state-recovery struct, or use standard build-tag substitution if it strictly follows OS boundaries.\n  confidence: high\n\n[SUGGESTION] Hidden side-effects violate Command-Query Separation (CQS).\n  location: internal/doltserver/doltserver.go\n  category: design\n  suggestion: `IsRunningWithRecovery` sounds like a pure predicate (query), but it mutates the filesystem by writing a PID file (command). Rename the function to explicitly convey the side effect (e.g., `RecoverTrackingAndCheckRunning` or `EnsureTrackedState`) so callers are aware it is not safe to call if filesystem mutations are undesirable.\n  confidence: medium\n\n[SUGGESTION] Shelling out to `lsof` and `netstat` introduces structural fragility and potential injection vectors.\n  location: internal/doltserver/recover_darwin.go\n  category: security\n  suggestion: Ensure the `port` variable passed into the shell commands is strictly strongly-typed as an `int` (not a string) throughout the internal call chain before formatting it into the `lsof` or `netstat` arguments. This guarantees structural immunity to argument injection, even if the port ultimately originates from configuration.\n  confidence: high"
+    },
+    {
+      "seq": 3,
+      "round": 1,
+      "role": "critic",
+      "timestamp": "2026-05-08T17:34:48Z",
+      "tags": [
+        "[BLOCKER]"
+      ],
+      "content": "[BLOCKER] Recovery can silently take ownership of an externally started `dolt sql-server`\n  location: Design / Layer 1 and Layer 3\n  category: correctness\n  suggestion: Add an ownership check beyond “process is dolt”: verify command line, working directory, configured data dir, socket/port file provenance, or another bd-owned marker before rewriting the PID file or allowing `bd dolt stop` to kill it. If ownership cannot be proven, recover status only and refuse stop/start takeover.\n  confidence: high\n  confidence_score: 0.88\n  severity_rationale: This can make `bd dolt stop` kill a user-managed Dolt server, which is exactly the safety class the existing PID-file contract avoids.\n  scope: in-diff\n  scope_rationale: The planned recovery logic changes the ownership decision for missing-PID cases.\n\n[BLOCKER] Linux port-to-PID design is incomplete as stated\n  location: `internal/doltserver/recover_linux.go`\n  category: correctness\n  suggestion: Specify and test the full `/proc` algorithm: map listening socket inode from `/proc/net/tcp{,6}` to `/proc/\u003cpid\u003e/fd/*` symlinks, handle permission-denied entries, IPv4-mapped IPv6, loopback vs wildcard binds, and multiple matches deterministically.\n  confidence: high\n  confidence_score: 0.84\n  severity_rationale: `/proc/net/tcp` alone does not contain PIDs; an incomplete implementation would fail recovery on Linux, likely the most important CI/server platform.\n  scope: in-diff\n  scope_rationale: This is part of the new planned platform implementation.\n\n[ISSUE] `bd dolt stop` depends on PID-file rewrite succeeding, contradicting the best-effort write claim\n  location: Layer 1 / Layer 3\n  category: correctness\n  suggestion: Either make `StopWithForce` accept the recovered `State` directly or add a recovery-aware stop path. Do not rely on a best-effort PID-file write when the plan says read-only PID dir should still allow stop/status in the current invocation.\n  confidence: high\n  confidence_score: 0.9\n  severity_rationale: The stated acceptance criteria include stop working even when persistence fails, but the proposed call flow falls back into `StopWithForce`’s PID-file-only logic.\n  scope: in-diff\n  scope_rationale: The inconsistency is introduced by the planned wiring.\n\n[ISSUE] Recovery after a stale PID file is underspecified and may skip the needed path\n  location: `IsRunningWithRecovery`\n  category: correctness\n  suggestion: Define precisely what `IsRunning` returns for stale, non-dolt, unreadable, or malformed PID files, and ensure `IsRunningWithRecovery` attempts recovery for all stale/non-running states, not only missing files.\n  confidence: medium\n  confidence_score: 0.74\n  severity_rationale: The problem statement includes stale PID files, but the algorithm is framed mostly around missing PID files; stale cases are common and user-visible.\n  scope: adjacent\n  scope_rationale: It depends on existing `IsRunning` behavior but the new helper must handle it correctly.\n\n[ISSUE] SQL ping as the first gate can reject valid recoverable servers for configuration/auth/TLS reasons\n  location: `RecoverState`\n  category: correctness\n  suggestion: Treat connection errors by class: “connection refused/no listener” can mean no recovery; auth/TLS/protocol errors should not be collapsed into `(nil, nil)` if the port lookup and process validation can prove a Dolt SQL server is present. At minimum log/debug the reason.\n  confidence: medium\n  confidence_score: 0.7\n  severity_rationale: Misclassifying permanent configuration mismatch as “not running” preserves the false-negative class this change is meant to fix.\n  scope: in-diff\n  scope_rationale: The new recovery policy defines this error taxonomy.\n\n[ISSUE] Port-only lookup is ambiguous when the configured host is not the actual bind address\n  location: `lookupPIDForPort(host, port)`\n  category: correctness\n  suggestion: Specify matching rules for `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, and `::`; tests should cover wildcard bind and IPv6 loopback. Prefer matching by port plus listener state, then validating process and server identity.\n  confidence: high\n  confidence_score: 0.82\n  severity_rationale: Host/bind mismatches are routine on localhost services and can make recovery fail despite a live server.\n  scope: in-diff\n  scope_rationale: The new platform lookup API takes host/port but the plan only discusses port.\n\n[ISSUE] Race between recovery validation and later signal can kill the wrong process after PID reuse\n  location: Layer 1 / Layer 3\n  category: correctness\n  suggestion: Revalidate the PID immediately before signaling, or pass the recovered state into stop and verify command line/start time if available. Avoid writing a PID file and then trusting it later without freshness checks.\n  confidence: medium\n  confidence_score: 0.68\n  severity_rationale: The race window is small but the consequence is signaling an unrelated process.\n  scope: adjacent\n  scope_rationale: The new recovery flow feeds existing stop semantics through a rewritten PID file.\n\n[ISSUE] Best-effort write warning to stderr may corrupt machine-readable output\n  location: `RecoverState` and `bd dolt status`\n  category: correctness\n  suggestion: Route warnings through the existing CLI diagnostic/logging path and suppress or structure them for JSON/status output modes. Add tests for JSON output if `bd dolt status` supports it.\n  confidence: medium\n  confidence_score: 0.72\n  severity_rationale: Status output is described as observable automation behavior; unexpected stderr/stdout can break callers even if the command exits 0.\n  scope: in-diff\n  scope_rationale: The warning behavior is explicitly introduced by the plan.\n\n[SUGGESTION] Add a test for stale PID pointing at a live non-Dolt process\n  location: Test plan\n  category: completeness\n  suggestion: Create a PID file containing a PID for a harmless non-Dolt process while the real Dolt server is listening, then assert recovery replaces the stale PID only after validating the listener.\n  confidence: high\n  confidence_score: 0.86\n  severity_rationale: This is a cheap boundary test for the stated stale-PID goal and would catch wrong trust in the existing PID file.\n  scope: in-diff\n  scope_rationale: It directly tests the new recovery branch.\n  effort: small\n\n[SUGGESTION] Add a test for PID-file write failure through the actual `bd dolt stop` path\n  location: Test plan / integration tests\n  category: completeness\n  suggestion: The read-only PID-dir test should cover `bd dolt stop`, not only `RecoverState`, because the proposed stop wiring currently depends on the rewritten file.\n  confidence: high\n  confidence_score: 0.9\n  severity_rationale: This would expose a concrete acceptance-criteria mismatch with little extra test setup.\n  scope: in-diff\n  scope_rationale: It validates the exact changed CLI behavior.\n  effort: small\n\n[SUGGESTION] Add negative test for external Dolt server on the shared port\n  location: Test plan\n  category: completeness\n  suggestion: Start a `dolt sql-server` outside bd’s normal shared-server launcher, remove/avoid the PID file, and assert `bd dolt stop` does not claim or kill it unless ownership can be proven.\n  confidence: high\n  confidence_score: 0.84\n  severity_rationale: This is the main safety regression risk and is testable with the same real-Dolt fixture.\n  scope: in-diff\n  scope_rationale: The new recovery behavior changes this exact case.\n  effort: medium\n\n[SUGGESTION] Add tests for host/address boundary cases\n  location: Test plan\n  category: completeness\n  suggestion: Cover `localhost`, `127.0.0.1`, `::1`, and wildcard listener behavior where supported; at minimum document skipped platform cases.\n  confidence: medium\n  confidence_score: 0.7\n  severity_rationale: Address matching bugs are easy to miss and can produce platform-specific false negatives.\n  scope: in-diff\n  scope_rationale: The planned lookup function accepts host and port.\n  effort: medium\n\n[SUGGESTION] Do not preserve the manual repro only as a comment\n  location: Test plan / Manual repro verification\n  category: completeness\n  suggestion: Put the repro in `scripts/` or a skipped-by-default integration test helper. A comment is likely to rot and cannot be exercised by CI or maintainers.\n  confidence: medium\n  confidence_score: 0.64\n  severity_rationale: This is not a ship blocker, but executable repros catch regressions better than prose.\n  scope: in-diff\n  scope_rationale: The plan adds this artifact as part of the change.\n  effort: small\n\n[GOOD] The plan correctly keeps recovery out of `KillStaleServers`/`killall`; preserving that safety contract is essential.\n\n[GOOD] The proposed split into recovery helper, recovery-aware status check, and narrow CLI call-site changes is appropriately scoped for this bug."
+    },
+    {
+      "seq": 4,
+      "round": 1,
+      "role": "strategist",
+      "timestamp": "2026-05-08T17:34:55Z",
+      "tags": [
+        "[BLOCKER]"
+      ],
+      "content": "[BLOCKER] `bd dolt stop` cannot reliably “work in current invocation” when PID rewrite fails, contradicting Goal #1 and the read-only mitigation narrative  \n  location: `/tmp/3687-plan/plan.md` (Layer 1 best-effort PID write + Layer 3 stop flow)  \n  category: correctness  \n  suggestion: In `doltStopCmd`, if recovery returns a live PID, stop that PID directly (or pass recovered state into `StopWithForce`) instead of depending on a successful PID-file rewrite; keep file rewrite as optimization, not prerequisite.  \n  confidence: high\n\n[ISSUE] Recovered ownership check is too weak (`isDoltProcess(pid)` proves “dolt”, not “bd-managed shared server”), risking unintended takeover/stop of unrelated `dolt sql-server` on the same port  \n  location: `/tmp/3687-plan/plan.md` (Layer 1 validation gate)  \n  category: design  \n  suggestion: Add a second ownership signal before rewriting PID/allowing stop (e.g., command-line arg check for expected data dir/socket config, or a bd-written startup marker/token validated via process metadata); if ambiguous, report “reachable but not safely claimable” and do not adopt.  \n  confidence: medium\n\n[ISSUE] Windows support story is internally inconsistent (design includes Windows lookup via `netstat`, but integration plan says “skip on Windows (no lsof)”)  \n  location: `/tmp/3687-plan/plan.md` (Layer 1 platform strategy + integration test section)  \n  category: completeness  \n  suggestion: Choose one explicit stance: (a) support Windows with tests using `netstat` path, or (b) declare unsupported and remove Windows implementation from scope for this PR.  \n  confidence: high\n\n[ISSUE] “Friendly diagnostics when recovery isn’t possible” is a stated goal but not concretely specified or acceptance-tested  \n  location: `/tmp/3687-plan/plan.md` (Goals #5, Acceptance criteria, Test plan)  \n  category: completeness  \n  suggestion: Add explicit acceptance criteria and tests for at least three user-facing outcomes: no listener, unsupported port→PID lookup, and non-dolt listener; define exact message shape for human and JSON modes.  \n  confidence: high\n\n[SUGGESTION] Use a single “server state resolution” path to reduce drift and future complexity (Lehman L2 / Parnas information-hiding)  \n  location: `/tmp/3687-plan/plan.md` (Layer 2/3 command wiring)  \n  category: design  \n  suggestion: Introduce one internal resolver used by `status/start/stop` and optionally by stop internals, so fallback policy (PID-file → probe → adopt) is centralized and not split across command call-sites + `StopWithForce`.  \n  confidence: medium\n\n[SUGGESTION] Rebalance test effort toward behavior-value over protocol emulation to improve delivery speed (Lean “eliminate waste”, DORA lead time)  \n  location: `/tmp/3687-plan/plan.md` (Unit test `LiveSQLNonDolt`)  \n  category: performance  \n  suggestion: Prefer dependency-injected seams for probe and PID-lookup classification over hand-rolled MySQL handshake stubs, then keep one or two high-value end-to-end tests with real `dolt`.  \n  confidence: medium\n\n[GOOD] The plan is strongly purpose-aligned: it targets the exact user-facing failure loop (`status/stop/start`) and explicitly keeps `killall` safety semantics unchanged.\n\n[GOOD] The layering is strategically sound: recovery is isolated behind `doltserver` and avoids changing `IsRunning` contract, which minimizes regression blast radius.\n\n[GOOD] Scope control is excellent (clear non-goals, no driver boundary violation, no dependency creep), which supports faster, safer delivery and better maintainability."
+    },
+    {
+      "seq": 5,
+      "round": 1,
+      "role": "synthesizer",
+      "timestamp": "2026-05-08T17:37:32Z",
+      "tags": [
+        "[CONVERGENCE:partial]"
+      ],
+      "content": "Verdict: **Request Changes**\n\n### Summary\nThe plan introduces a well-structured approach with good layering to resolve PID-file false-negatives in shared-server mode. However, several critical security and correctness concerns, particularly around robust process ownership validation, secure handling of external command execution, and ensuring the reliability of `bd dolt stop` under PID-file rewrite failures, necessitate significant revisions before approval.\n\n### Issues Found\n\n*   **[CRITICAL] Command injection via unsanitized port/host in shell-out to `lsof`/`netstat`**\n    *   **Description**: Shelling out to `lsof` (macOS) and `netstat` (Windows) without validating inputs and using string interpolation creates command injection vulnerabilities. Port and host values must be strictly validated as numeric/valid hostname and passed as explicit argument arrays.\n    *   **Priority**: 1 (critical)\n*   **[CRITICAL] Recovery can silently take ownership of an externally started `dolt sql-server`**\n    *   **Description**: The `isDoltProcess(pid)` validation is insufficient to confirm if a discovered `dolt sql-server` process was spawned and is managed by `bd`. This risks `bd dolt stop` terminating user-managed servers. A stronger ownership check (e.g., command-line argument checks, data directory validation, or a unique `bd`-specific marker) is required before claiming ownership or rewriting the PID file.\n    *   **Priority**: 1 (critical)\n*   **[CRITICAL] `bd dolt stop` cannot reliably “work in current invocation” when PID rewrite fails**\n    *   **Description**: The plan states `bd dolt stop` should function even if PID file rewrite fails, but the proposed implementation relies on `StopWithForce`, which uses the potentially non-updated PID file. This contradicts the stated goal and acceptance criteria. `StopWithForce` must either accept the recovered state directly or a recovery-aware stop path must be implemented.\n    *   **Priority**: 1 (critical)\n*   **[CRITICAL] Linux port-to-PID lookup design is incomplete**\n    *   **Description**: The plan specifies parsing `/proc/net/tcp` and `/proc/net/tcp6`, but these files do not directly provide PIDs. A detailed algorithm to map socket inodes to process file descriptors (e.g., via `/proc/\u003cpid\u003e/fd/*`) is missing and essential for Linux recovery.\n    *   **Priority**: 1 (critical)\n*   **[MAJOR] PID-file rewrite without atomic rename allows race to symlink attack**\n    *   **Description**: Rewriting the PID file directly without an atomic rename (from a temporary file) in a user-controlled directory creates a symlink attack vulnerability, potentially leading to arbitrary file truncation.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Process name validation (`isDoltProcess`) is bypassable**\n    *   **Description**: Relying solely on `isDoltProcess` (which checks process name) is a weak heuristic. A local attacker could spoof the process name. Verifying the process's executable path against a known `dolt` binary would improve security.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Tight coupling between `doltserver` and `configfile` parsing logic**\n    *   **Description**: `RecoverState` within `doltserver` should not call `configfile.Load`. The resolved port/host configuration should be passed down from the CLI layer to maintain separation of concerns.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Package-level variable injection seam for testing introduces global state and test fragility**\n    *   **Description**: Using a global variable for stubbing the port lookup function is an anti-pattern. It leads to test pollution and prevents safe parallel test execution. An interface-based dependency injection approach is strongly preferred.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Windows support story is internally inconsistent**\n    *   **Description**: The plan outlines `netstat` parsing for Windows but states integration tests will \"skip on Windows (no lsof)\". A clear, consistent stance on Windows support and testing for this feature is required.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] “Friendly diagnostics when recovery isn’t possible” is underspecified**\n    *   **Description**: While a stated goal, the plan lacks concrete acceptance criteria and tests for user-facing diagnostic output when recovery fails (e.g., no listener, unsupported lookup, non-dolt listener).\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Recovery after a stale PID file is underspecified and may skip needed path**\n    *   **Description**: The algorithm primarily focuses on *missing* PID files. It needs to precisely define behavior and ensure recovery attempts are made for *stale*, unreadable, or malformed PID files as well.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] SQL ping as first gate can reject valid servers for config/auth/TLS reasons**\n    *   **Description**: Collapsing all `PingContext` failures into `(nil, nil)` can obscure underlying configuration, authentication, or TLS errors, potentially leading to false negatives if a Dolt server is listening but misconfigured. Error classification and explicit logging are necessary.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Port-only lookup is ambiguous when configured host is not the actual bind address**\n    *   **Description**: The `lookupPIDForPort(host, port)` needs clear rules for matching various bind addresses (`127.0.0.1`, `0.0.0.0`, `::1`, wildcard `::`) to prevent recovery failures due to host/bind mismatches.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Race between recovery validation and later signal can kill wrong process after PID reuse**\n    *   **Description**: There's a small race window where a recovered PID could be reused by another process between validation and signaling. Revalidation immediately before signaling, or passing richer process state, is needed to prevent unintended terminations.\n    *   **Priority**: 2 (high)\n*   **[MAJOR] Best-effort write warning to stderr may corrupt machine-readable output**\n    *   **Description**: Warnings emitted to stderr during best-effort PID file writes can disrupt automated parsing of `bd dolt status` output. Warnings should be routed through a dedicated logging path, suppressed, or formatted for machine readability.\n    *   **Priority**: 2 (high)\n\n### Suggestions\n\n*   Bind the SQL probe DSN to localhost explicitly in shared-server mode (`internal/doltserver/recover.go`).\n*   Harden Windows `netstat -ano` output parsing against locale variations (`internal/doltserver/recover_windows.go`).\n*   Rename `IsRunningWithRecovery` to explicitly convey side effects (e.g., `RecoverTrackingAndCheckRunning`) (`internal/doltserver/doltserver.go`).\n*   Add a unit test for stale PID pointing at a live non-Dolt process (`internal/doltserver/recover_test.go`).\n*   Add an integration test for PID-file write failure through the actual `bd dolt stop` path (`cmd/bd/dolt_recover_test.go`).\n*   Add a negative integration test for external Dolt server on the shared port (`cmd/bd/dolt_recover_test.go`).\n*   Add tests for host/address boundary cases (e.g., `localhost`, `127.0.0.1`, `::1`, wildcard listeners) (`internal/doltserver/recover_test.go`, `cmd/bd/dolt_recover_test.go`).\n*   Do not preserve the manual reproduction steps only as a comment; place it in `scripts/` or a skipped integration test (`recover_test.go`).\n*   Consider using a single “server state resolution” path to centralize fallback policy (`Layer 2/3 command wiring`).\n*   Rebalance test effort towards behavior-value over protocol emulation to improve delivery speed (`Unit test LiveSQLNonDolt`).\n\n### What's Good\n\n*   **Architectural Adherence**: Strict adherence to the established architectural boundary by explicitly refusing engine introspection and handling process lifecycle on the BD side.\n*   **Symmetric Fix**: Excellent symmetric application of the fix across `start`, `stop`, and `status` commands, avoiding ad-hoc patchwork and ensuring consistent state handling.\n*   **Safety Invariant**: Crucially, recovery is never wired into `KillStaleServers` or `killall`, preserving the safety invariant that `bd` will not kill externally-started servers without explicit PID-file evidence.\n*   **No New Dependencies**: No new external dependencies or widening of the `dolthub/driver` interface, minimizing supply-chain and boundary-creep risks.\n*   **Timeouts**: The inclusion of 2s/3s timeouts on the SQL probe and `lsof` prevents the recovery path from becoming a hang vector.\n*   **Purpose-Aligned**: The plan is strongly purpose-aligned, targeting the exact user-facing failure loop and explicitly maintaining existing `killall` safety.\n*   **Layering**: The proposed layering into a recovery helper, a recovery-aware status check, and minimal CLI call-site changes is strategically sound and appropriately scoped.\n*   **Scope Control**: Excellent scope control with clear non-goals, no driver boundary violation, and no dependency creep, supporting faster, safer delivery and better maintainability.\n\n### Convergence Assessment\n`[CONVERGENCE:partial]`\n\n### Cross-Model Agreement\n\n*   **Independently corroborated**:\n    *   **Command injection risk in shell-outs**: Raised by the Security reviewer (as an ISSUE) and corroborated by the Architect reviewer (as a SUGGESTION, emphasizing structural fragility with high confidence).\n    *   **Weak ownership check risking unintended takeover**: Highlighted as a BLOCKER by the Critic reviewer and as a critical ISSUE by the Strategist reviewer.\n    *   **`bd dolt stop` unreliability with failed PID rewrite**: Identified as an ISSUE by the Critic reviewer and as a BLOCKER by the Strategist reviewer, indicating strong agreement on this critical functional flaw.\n*   **Unique perspectives**: The incompleteness of the Linux `/proc` algorithm (Critic), the need for atomic PID file writes (Security), the issue with global test state variables (Architect), the inconsistency in Windows support (Strategist), the lack of clear diagnostic specifications (Strategist), issues with stale PID file handling (Critic), SQL ping error classification (Critic), host/bind address ambiguity (Critic), the PID reuse race (Critic), and stderr warnings corrupting output (Critic) represent single model perspectives but are all valid concerns.\n\n[ACTION_ITEMS]\n[\n  {\"title\": \"Harden shell-out commands against injection\", \"description\": \"Validate that port is strictly numeric and host is a valid IP/hostname before interpolating into `lsof`/`netstat` commands. Use argument arrays with `exec.Command` and reject invalid port ranges.\", \"priority\": 1, \"role\": \"security\"},\n  {\"title\": \"Strengthen process ownership validation\", \"description\": \"Beyond `isDoltProcess`, add a second ownership signal (e.g., command-line argument check for expected data dir/socket config, or a `bd`-written startup marker/token) before rewriting the PID file or allowing `bd dolt stop` to kill a process. If ownership is ambiguous, report 'reachable but not safely claimable'.\", \"priority\": 1, \"role\": \"critic\"},\n  {\"title\": \"Ensure `bd dolt stop` works when PID rewrite fails\", \"description\": \"In `doltStopCmd`, if recovery returns a live PID, stop that PID directly (or pass the recovered state into `StopWithForce`) instead of depending on a successful PID-file rewrite. Keep PID file rewrite as an optimization, not a prerequisite for stopping.\", \"priority\": 1, \"role\": \"strategist\"},\n  {\"title\": \"Complete Linux port-to-PID lookup design\", \"description\": \"Specify and test the full `/proc` algorithm for Linux. This includes mapping listening socket inodes from `/proc/net/tcp{,6}` to `/proc/\u003cpid\u003e/fd/*` symlinks, handling permission-denied entries, IPv4-mapped IPv6, loopback vs. wildcard binds, and deterministic handling of multiple matches.\", \"priority\": 1, \"role\": \"critic\"},\n  {\"title\": \"Implement atomic PID-file writes\", \"description\": \"Write to a temporary file in the same directory, then use `os.Rename` atomically. Set restrictive permissions (0600) on the temp file before renaming. Verify the target path is not a symlink, or use `O_NOFOLLOW` semantics.\", \"priority\": 2, \"role\": \"security\"},\n  {\"title\": \"Improve `isDoltProcess` validation\", \"description\": \"Beyond checking process name, verify the process's executable path resolves to a known `dolt` binary (e.g., compare against `exec.LookPath('dolt')`). Document this as a best-effort heuristic.\", \"priority\": 2, \"role\": \"security\"},\n  {\"title\": \"Refactor `doltserver` configuration parsing\", \"description\": \"Pass the resolved port/host into `RecoverState` and `IsRunningWithRecovery` from the command layer (Layer 3), rather than having `doltserver` call `configfile.Load`. This decouples `doltserver` from configuration file format details.\", \"priority\": 2, \"role\": \"architect\"},\n  {\"title\": \"Eliminate global state for testing\", \"description\": \"Avoid using package-level variables for stubbing the lookup function in tests. Instead, define an interface (e.g., `PortResolver`) and inject it into a state-recovery struct, allowing for safe parallel test execution.\", \"priority\": 2, \"role\": \"architect\"},\n  {\"title\": \"Clarify Windows support consistency\", \"description\": \"Choose one explicit stance: either fully support Windows with tests using the `netstat` path, or explicitly declare it unsupported for this PR and remove the Windows implementation from scope.\", \"priority\": 2, \"role\": \"strategist\"},\n  {\"title\": \"Specify and test diagnostic output\", \"description\": \"Add explicit acceptance criteria and tests for 'friendly diagnostics when recovery isn't possible'. Define the exact message shape for human and JSON output modes for scenarios like no listener, unsupported lookup, and non-dolt listener.\", \"priority\": 2, \"role\": \"strategist\"},\n  {\"title\": \"Address stale PID file recovery\", \"description\": \"Define precisely what `IsRunning` returns for stale, non-dolt, unreadable, or malformed PID files, and ensure `IsRunningWithRecovery` attempts recovery for all such non-running states, not only missing files.\", \"priority\": 2, \"role\": \"critic\"},\n  {\"title\": \"Refine SQL ping error handling\", \"description\": \"Treat connection errors by class: 'connection refused/no listener' can mean no recovery; auth/TLS/protocol errors should not be collapsed into `(nil, nil)` if port lookup and process validation prove a Dolt SQL server is present. Log the specific reason.\", \"priority\": 2, \"role\": \"critic\"},\n  {\"title\": \"Clarify host/address matching for port lookup\", \"description\": \"Specify matching rules for `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, and `::`. Tests should cover wildcard binds and IPv6 loopback cases, prioritizing matching by port plus listener state, then validating process and server identity.\", \"priority\": 2, \"role\": \"critic\"},\n  {\"title\": \"Mitigate PID reuse race during signaling\", \"description\": \"Revalidate the PID immediately before signaling, or pass the recovered state into stop and verify command line/start time if available. Avoid writing a PID file and then trusting it later without freshness checks.\", \"priority\": 2, \"role\": \"critic\"},\n  {\"title\": \"Route stderr warnings via logging path\", \"description\": \"Route warnings from best-effort PID file writes through the existing CLI diagnostic/logging path and suppress or structure them for JSON/status output modes to prevent corruption of machine-readable output.\", \"priority\": 2, \"role\": \"critic\"}\n]\n[/ACTION_ITEMS]"
+    }
+  ],
+  "metadata": {
+    "target": "/tmp/3687-plan/plan.md",
+    "review_type": "plan",
+    "rounds": 2,
+    "duration": "3m32.808s",
+    "duration_ms": 212808,
+    "members": [
+      "architect",
+      "strategist",
+      "critic",
+      "security",
+      "synthesizer"
+    ],
+    "providers": {
+      "architect": "gemini",
+      "critic": "codex",
+      "security": "opencode",
+      "strategist": "cursor",
+      "synthesizer": "copilot"
+    },
+    "convergence": "partial",
+    "created_at": "2026-05-08T10:34:00.081236-07:00",
+    "dialogue": {
+      "round": 1,
+      "total_messages": 5,
+      "round_messages": 5,
+      "degraded": false,
+      "effective_max_rounds": 2,
+      "round_durations": [
+        {
+          "round": 1,
+          "duration_ms": 212803,
+          "messages": 5
+        }
+      ]
+    }
+  }
+}
