@@ -288,7 +288,15 @@ type mcpFieldMapper struct {
 }
 
 func (m *mcpFieldMapper) PriorityToBeads(trackerPriority interface{}) int {
-	return m.callMapper("priority_to_beads", trackerPriority, 2).(int)
+	result := m.callMapper("priority_to_beads", trackerPriority, float64(2))
+	switch v := result.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 2
+	}
 }
 
 func (m *mcpFieldMapper) PriorityToTracker(beadsPriority int) interface{} {
