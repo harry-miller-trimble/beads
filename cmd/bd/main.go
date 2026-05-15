@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/subosito/gotenv"
 
+	"github.com/steveyegge/beads/internal/automations"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -26,6 +27,7 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/molecules"
+	"github.com/steveyegge/beads/internal/plugin"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/telemetry"
@@ -46,7 +48,7 @@ var (
 	rootCancel context.CancelFunc
 
 	// Hook runner for extensibility
-	hookRunner *hooks.Runner
+	hookRunner hooks.HookRunner
 
 	// Store concurrency protection
 	storeMutex  sync.Mutex // Protects store access from background goroutine
@@ -1026,7 +1028,28 @@ func NewRootCmd() *cobra.Command {
 			// dbPath is .beads/something.db, so workspace root is parent of .beads
 			if dbPath != "" {
 				beadsDir := filepath.Dir(dbPath)
-				hookRunner = hooks.NewRunner(filepath.Join(beadsDir, "hooks"))
+				scriptRunner := hooks.NewRunner(filepath.Join(beadsDir, "hooks"))
+
+				// Try to add WASM automation runner alongside script hooks.
+				var runners []hooks.HookRunner
+				runners = append(runners, scriptRunner)
+
+				pluginPaths, err := plugin.DefaultPaths()
+				if err == nil {
+					wasmRT, err := automations.NewRuntime(rootCtx, filepath.Join(pluginPaths.CacheDir, "kv"))
+					if err == nil {
+						wasmRunner, err := automations.NewWASMHookRunner(wasmRT, pluginPaths)
+						if err == nil {
+							runners = append(runners, wasmRunner)
+						}
+					}
+				}
+
+				if len(runners) == 1 {
+					hookRunner = runners[0]
+				} else {
+					hookRunner = hooks.NewCompositeRunner(runners...)
+				}
 			}
 
 			// Wrap store with hook-firing decorator so ALL mutations

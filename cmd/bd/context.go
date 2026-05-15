@@ -36,7 +36,7 @@ type CommandContext struct {
 	Store      storage.DoltStorage
 	RootCtx    context.Context
 	RootCancel context.CancelFunc
-	HookRunner *hooks.Runner
+	HookRunner hooks.HookRunner
 
 	// Version tracking
 	VersionUpgradeDetected bool
@@ -183,7 +183,7 @@ func setRootContext(ctx context.Context, cancel context.CancelFunc) {
 }
 
 // getHookRunner returns the hook runner instance.
-func getHookRunner() *hooks.Runner {
+func getHookRunner() hooks.HookRunner {
 	if shouldUseGlobals() {
 		return hookRunner
 	}
@@ -191,7 +191,7 @@ func getHookRunner() *hooks.Runner {
 }
 
 // setHookRunner updates the hook runner.
-func setHookRunner(h *hooks.Runner) {
+func setHookRunner(h hooks.HookRunner) {
 	if cmdCtx != nil {
 		cmdCtx.HookRunner = h
 	}

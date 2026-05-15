@@ -27,12 +27,12 @@ import (
 type HookFiringStore struct {
 	DoltStorage             // embed for passthrough of non-overridden methods
 	inner       DoltStorage // the real store
-	runner      *hooks.Runner
+	runner      hooks.HookRunner
 }
 
 // NewHookFiringStore wraps store with automatic hook firing.
 // If runner is nil, hooks are silently skipped (passthrough only).
-func NewHookFiringStore(store DoltStorage, runner *hooks.Runner) *HookFiringStore {
+func NewHookFiringStore(store DoltStorage, runner hooks.HookRunner) *HookFiringStore {
 	return &HookFiringStore{
 		DoltStorage: store,
 		inner:       store,

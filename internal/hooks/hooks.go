@@ -10,6 +10,30 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
+// HookRunner is the interface for anything that can fire hooks.
+// Both the script-based Runner and WASM-based WASMHookRunner satisfy this.
+type HookRunner interface {
+	Run(event string, issue *types.Issue)
+}
+
+// CompositeRunner chains multiple HookRunners so both script and WASM
+// hooks fire on the same event.
+type CompositeRunner struct {
+	runners []HookRunner
+}
+
+// NewCompositeRunner creates a runner that delegates to all provided runners.
+func NewCompositeRunner(runners ...HookRunner) *CompositeRunner {
+	return &CompositeRunner{runners: runners}
+}
+
+// Run fires the event on all child runners.
+func (c *CompositeRunner) Run(event string, issue *types.Issue) {
+	for _, r := range c.runners {
+		r.Run(event, issue)
+	}
+}
+
 // Event types
 const (
 	EventCreate = "create"
