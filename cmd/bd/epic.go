@@ -138,10 +138,10 @@ var closeEligibleEpicsCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerEpicCmds(root *cobra.Command) {
 	epicCmd.AddCommand(epicStatusCmd)
 	epicCmd.AddCommand(closeEligibleEpicsCmd)
 	epicStatusCmd.Flags().Bool("eligible-only", false, "Show only epics eligible for closure")
 	closeEligibleEpicsCmd.Flags().Bool("dry-run", false, "Preview what would be closed without making changes")
-	rootCmd.AddCommand(epicCmd)
+	root.AddCommand(epicCmd)
 }

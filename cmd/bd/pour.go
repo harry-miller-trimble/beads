@@ -254,7 +254,7 @@ func runPour(cmd *cobra.Command, args []string) {
 	}
 }
 
-func init() {
+func registerPourCmds() {
 	// Pour command flags
 	pourCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
 	pourCmd.Flags().Bool("dry-run", false, "Preview what would be created")

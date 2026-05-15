@@ -817,7 +817,7 @@ func createDepsAcceptedTypeList() string {
 	return strings.Join(names, ", ")
 }
 
-func init() {
+func registerCreateCmds(root *cobra.Command) {
 	createCmd.Flags().StringP("file", "f", "", "Create multiple issues from markdown file")
 	createCmd.Flags().String("graph", "", "Create a graph of issues with dependencies from JSON plan file")
 	createCmd.Flags().String("title", "", "Issue title (alternative to positional argument)")
@@ -863,7 +863,7 @@ func init() {
 	createCmd.Flags().String("defer", "", "Defer until date (issue hidden from bd ready until then). Same formats as --due")
 	createCmd.Flags().String("metadata", "", "Set custom metadata (JSON string or @file.json to read from file)")
 	// Note: --json flag is defined as a persistent flag in main.go, not here
-	rootCmd.AddCommand(createCmd)
+	root.AddCommand(createCmd)
 }
 
 // formatTimeForRPC converts a *time.Time to RFC3339 string for RPC calls.

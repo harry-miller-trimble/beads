@@ -709,7 +709,7 @@ type MoleculeReadyOutput struct {
 	ParallelGroups map[string][]string  `json:"parallel_groups"`
 }
 
-func init() {
+func registerReadyCmds(root *cobra.Command) {
 	readyCmd.Flags().IntP("limit", "n", 100, "Maximum issues to show (use 0 for unlimited)")
 	readyCmd.Flags().IntP("priority", "p", 0, "Filter by priority")
 	readyCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
@@ -733,7 +733,7 @@ func init() {
 	// Metadata filtering (GH#1406)
 	readyCmd.Flags().StringArray("metadata-field", nil, "Filter by metadata field (key=value, repeatable)")
 	readyCmd.Flags().String("has-metadata-key", "", "Filter issues that have this metadata key set")
-	rootCmd.AddCommand(readyCmd)
+	root.AddCommand(readyCmd)
 	blockedCmd.Flags().String("parent", "", "Filter to descendants of this bead/epic")
-	rootCmd.AddCommand(blockedCmd)
+	root.AddCommand(blockedCmd)
 }

@@ -317,7 +317,7 @@ var labelPropagateCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerLabelCmds(root *cobra.Command) {
 	// Issue ID completions
 	labelAddCmd.ValidArgsFunction = issueIDCompletion
 	labelRemoveCmd.ValidArgsFunction = issueIDCompletion
@@ -329,5 +329,5 @@ func init() {
 	labelCmd.AddCommand(labelListCmd)
 	labelCmd.AddCommand(labelListAllCmd)
 	labelCmd.AddCommand(labelPropagateCmd)
-	rootCmd.AddCommand(labelCmd)
+	root.AddCommand(labelCmd)
 }

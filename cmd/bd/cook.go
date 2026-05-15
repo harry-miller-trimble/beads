@@ -1058,7 +1058,7 @@ func substituteStepVars(steps []*formula.Step, vars map[string]string) {
 	}
 }
 
-func init() {
+func registerCookCmds(root *cobra.Command) {
 	cookCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	cookCmd.Flags().Bool("persist", false, "Persist proto to database (legacy behavior)")
 	cookCmd.Flags().Bool("force", false, "Replace existing proto if it exists (requires --persist)")
@@ -1067,5 +1067,5 @@ func init() {
 	cookCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value), enables runtime mode")
 	cookCmd.Flags().String("mode", "", "Cooking mode: compile (keep placeholders) or runtime (substitute vars)")
 
-	rootCmd.AddCommand(cookCmd)
+	root.AddCommand(cookCmd)
 }

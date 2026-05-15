@@ -72,7 +72,7 @@ func verifyFormula(formulaName string, vars map[string]string) error {
 	return nil
 }
 
-func init() {
+func registerMolSeedCmds() {
 	molSeedCmd.Flags().StringArray("var", []string{}, "Variable substitution for condition filtering (key=value)")
 	molCmd.AddCommand(molSeedCmd)
 }

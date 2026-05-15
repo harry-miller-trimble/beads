@@ -240,14 +240,14 @@ Returns exit code 0 if the graph is clean, 1 if issues are found.`,
 	},
 }
 
-func init() {
+func registerGraphCmds(root *cobra.Command) {
 	graphCmd.Flags().BoolVar(&graphAll, "all", false, "Show graph for all open issues")
 	graphCmd.Flags().BoolVar(&graphCompact, "compact", false, "Tree format, one line per issue, more scannable")
 	graphCmd.Flags().BoolVar(&graphBox, "box", false, "ASCII boxes showing layers")
 	graphCmd.Flags().BoolVar(&graphDOT, "dot", false, "Output Graphviz DOT format (pipe to: dot -Tsvg > graph.svg)")
 	graphCmd.Flags().BoolVar(&graphHTML, "html", false, "Output self-contained interactive HTML (redirect to file)")
 	graphCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(graphCmd)
+	root.AddCommand(graphCmd)
 	graphCmd.AddCommand(graphCheckCmd)
 }
 

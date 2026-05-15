@@ -213,12 +213,12 @@ WARNING: Direct database access bypasses the storage layer. Use with caution.`,
 	},
 }
 
-func init() {
+func registerSqlCmds(root *cobra.Command) {
 	sqlCmd.Flags().Bool("csv", false, "Output results in CSV format")
 
 	// Register as a read-only command for SELECT queries.
 	// Write queries will be caught by CheckReadonly.
 	// We don't add to readOnlyCommands because it can do writes too.
 
-	rootCmd.AddCommand(sqlCmd)
+	root.AddCommand(sqlCmd)
 }

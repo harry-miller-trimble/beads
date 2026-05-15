@@ -126,7 +126,7 @@ var (
 	worktreeForce  bool
 )
 
-func init() {
+func registerWorktreeCmdCmds(root *cobra.Command) {
 	worktreeCreateCmd.Flags().StringVar(&worktreeBranch, "branch", "", "Branch name for the worktree (default: same as name)")
 	worktreeRemoveCmd.Flags().BoolVar(&worktreeForce, "force", false, "Skip safety checks")
 
@@ -134,7 +134,7 @@ func init() {
 	worktreeCmd.AddCommand(worktreeListCmd)
 	worktreeCmd.AddCommand(worktreeRemoveCmd)
 	worktreeCmd.AddCommand(worktreeInfoCmd)
-	rootCmd.AddCommand(worktreeCmd)
+	root.AddCommand(worktreeCmd)
 }
 
 func runWorktreeCreate(cmd *cobra.Command, args []string) error {

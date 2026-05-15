@@ -70,7 +70,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerConfigDriftCmds() {
 	configCmd.AddCommand(configDriftCmd)
 }
 

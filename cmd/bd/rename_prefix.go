@@ -455,8 +455,8 @@ func generateRepairHashID(prefix string, issue *types.Issue, actor string, usedI
 	return newID, nil
 }
 
-func init() {
+func registerRenamePrefixCmds(root *cobra.Command) {
 	renamePrefixCmd.Flags().Bool("dry-run", false, "Preview changes without applying them")
 	renamePrefixCmd.Flags().Bool("repair", false, "Repair database with multiple prefixes by consolidating them")
-	rootCmd.AddCommand(renamePrefixCmd)
+	root.AddCommand(renamePrefixCmd)
 }

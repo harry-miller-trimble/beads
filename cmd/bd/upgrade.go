@@ -209,9 +209,9 @@ func pluralize(count int) string {
 	return "s"
 }
 
-func init() {
+func registerUpgradeCmds(root *cobra.Command) {
 	upgradeCmd.AddCommand(upgradeStatusCmd)
 	upgradeCmd.AddCommand(upgradeReviewCmd)
 	upgradeCmd.AddCommand(upgradeAckCmd)
-	rootCmd.AddCommand(upgradeCmd)
+	root.AddCommand(upgradeCmd)
 }

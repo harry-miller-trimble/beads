@@ -320,7 +320,7 @@ create, update, show, or close operation).`,
 	},
 }
 
-func init() {
+func registerCloseCmds(root *cobra.Command) {
 	closeCmd.Flags().StringP("reason", "r", "", "Reason for closing")
 	closeCmd.Flags().String("resolution", "", "Alias for --reason (Jira CLI convention)")
 	_ = closeCmd.Flags().MarkHidden("resolution") // Hidden alias for agent/CLI ergonomics
@@ -336,7 +336,7 @@ func init() {
 	closeCmd.Flags().Bool("claim-next", false, "Automatically claim the next highest priority available issue")
 	closeCmd.Flags().String("session", "", "Claude Code session ID (or set CLAUDE_SESSION_ID env var)")
 	closeCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(closeCmd)
+	root.AddCommand(closeCmd)
 }
 
 // isMachineCheckableGate returns true if the issue is a gate with a machine-checkable await type.

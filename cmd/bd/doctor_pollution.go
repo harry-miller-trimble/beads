@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -139,8 +140,8 @@ func runPollutionCheck(_ string, clean bool, yes bool) {
 	fmt.Printf("\nCleanup complete. To restore, run: bd init --from-jsonl %s\n", backupPath)
 }
 
-func init() {
-	rootCmd.AddCommand(doctorCmd)
+func registerDoctorPollutionCmds(root *cobra.Command) {
+	root.AddCommand(doctorCmd)
 	doctorCmd.Flags().BoolVar(&perfMode, "perf", false, "Run performance diagnostics and generate CPU profile")
 	doctorCmd.Flags().BoolVar(&checkHealthMode, "check-health", false, "Quick health check for git hooks (silent on success)")
 	doctorCmd.Flags().StringVarP(&doctorOutput, "output", "o", "", "Export diagnostics to JSON file")

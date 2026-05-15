@@ -389,7 +389,7 @@ var showCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerShowCmds(root *cobra.Command) {
 	showCmd.Flags().Bool("thread", false, "Show full conversation thread (for messages)")
 	showCmd.Flags().Bool("short", false, "Show compact one-line output per issue")
 	showCmd.Flags().Bool("long", false, "Show all available fields (extended metadata, agent identity, gate fields, etc.)")
@@ -401,7 +401,7 @@ func init() {
 	showCmd.Flags().BoolP("watch", "w", false, "Watch for changes and auto-refresh display")
 	showCmd.Flags().Bool("current", false, "Show the currently active issue (in-progress, hooked, or last touched)")
 	showCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(showCmd)
+	root.AddCommand(showCmd)
 }
 
 // resolveCurrentIssueID determines the current active issue for the agent.

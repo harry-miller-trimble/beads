@@ -81,6 +81,6 @@ RECOVERY
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(initSafetyHelpCmd)
+func registerInitSafetyHelpCmds(root *cobra.Command) {
+	root.AddCommand(initSafetyHelpCmd)
 }

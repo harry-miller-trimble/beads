@@ -74,7 +74,7 @@ func newDatabaseServer(backend proxy.Backend, rootDir, configPath, logPath, dolt
 	return nil, fmt.Errorf("unknown backend %q", backend)
 }
 
-func init() {
+func registerDbProxyChildCmds(root *cobra.Command) {
 	dbProxyChildCmd.Flags().StringVar(&dbProxyChildRoot, "root", "", "root directory holding proxy.lock, proxy.pid, proxy.log")
 	dbProxyChildCmd.Flags().IntVar(&dbProxyChildPort, "port", 0, "port to listen on")
 	dbProxyChildCmd.Flags().DurationVar(&dbProxyChildIdleTimeout, "idle-timeout", 30*time.Second, "idle timeout before shutdown (0 disables)")
@@ -86,5 +86,5 @@ func init() {
 	_ = dbProxyChildCmd.MarkFlagRequired("root")
 	_ = dbProxyChildCmd.MarkFlagRequired("port")
 	_ = dbProxyChildCmd.MarkFlagRequired("backend")
-	rootCmd.AddCommand(dbProxyChildCmd)
+	root.AddCommand(dbProxyChildCmd)
 }

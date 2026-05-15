@@ -201,7 +201,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerVcCmds(root *cobra.Command) {
 	vcMergeCmd.Flags().StringVar(&vcMergeStrategy, "strategy", "", "Conflict resolution strategy: 'ours' or 'theirs'")
 	vcCommitCmd.Flags().StringVarP(&vcCommitMessage, "message", "m", "", "Commit message")
 	vcCommitCmd.Flags().BoolVar(&vcCommitStdin, "stdin", false, "Read commit message from stdin")
@@ -209,5 +209,5 @@ func init() {
 	vcCmd.AddCommand(vcMergeCmd)
 	vcCmd.AddCommand(vcCommitCmd)
 	vcCmd.AddCommand(vcStatusCmd)
-	rootCmd.AddCommand(vcCmd)
+	root.AddCommand(vcCmd)
 }

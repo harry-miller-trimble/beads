@@ -428,7 +428,7 @@ backup configuration. The backup data at the destination is not deleted.`,
 	},
 }
 
-func init() {
+func registerBackupDoltCmds() {
 	backupCmd.AddCommand(backupInitCmd)
 	backupCmd.AddCommand(backupSyncCmd)
 	backupCmd.AddCommand(backupRemoveCmd)

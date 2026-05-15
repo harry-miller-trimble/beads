@@ -1639,7 +1639,7 @@ installed bd version - upgrading bd automatically updates hook behavior.`,
 	},
 }
 
-func init() {
+func registerHooksCmds(root *cobra.Command) {
 	hooksInstallCmd.Flags().Bool("force", false, "Overwrite existing hooks without backup")
 	hooksInstallCmd.Flags().Bool("shared", false, "Install hooks to .beads-hooks/ (versioned) instead of .git/hooks/")
 	hooksInstallCmd.Flags().Bool("chain", false, "Chain with existing hooks (run them before bd hooks)")
@@ -1650,5 +1650,5 @@ func init() {
 	hooksCmd.AddCommand(hooksListCmd)
 	hooksCmd.AddCommand(hooksRunCmd)
 
-	rootCmd.AddCommand(hooksCmd)
+	root.AddCommand(hooksCmd)
 }

@@ -1413,7 +1413,7 @@ func ParseExternalRef(ref string) (project, capability string) {
 	return parts[1], parts[2]
 }
 
-func init() {
+func registerDepCmds(root *cobra.Command) {
 	// dep command shorthand flag
 	depCmd.Flags().StringP("blocks", "b", "", "Issue ID that this issue blocks (shorthand for: bd dep add <blocked> <blocker>)")
 	depCmd.Flags().Bool("no-cycle-check", false, "Skip cycle detection after adding (use for bulk wiring — run 'bd dep cycles' to verify afterwards)")
@@ -1447,5 +1447,5 @@ func init() {
 	depCmd.AddCommand(depListCmd)
 	depCmd.AddCommand(depTreeCmd)
 	depCmd.AddCommand(depCyclesCmd)
-	rootCmd.AddCommand(depCmd)
+	root.AddCommand(depCmd)
 }

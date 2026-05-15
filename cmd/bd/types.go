@@ -94,6 +94,6 @@ type typeInfo struct {
 	Description string `json:"description"`
 }
 
-func init() {
-	rootCmd.AddCommand(typesCmd)
+func registerTypesCmds(root *cobra.Command) {
+	root.AddCommand(typesCmd)
 }

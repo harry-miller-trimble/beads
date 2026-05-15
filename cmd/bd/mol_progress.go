@@ -205,6 +205,6 @@ func formatDuration(hours float64) string {
 	return fmt.Sprintf("~%.1f weeks", weeks)
 }
 
-func init() {
+func registerMolProgressCmds() {
 	molCmd.AddCommand(molProgressCmd)
 }

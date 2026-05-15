@@ -305,7 +305,7 @@ func formatQueryIssue(buf *strings.Builder, issue *types.Issue) {
 	}
 }
 
-func init() {
+func registerQueryCmds(root *cobra.Command) {
 	queryCmd.Flags().IntP("limit", "n", 50, "Limit results (default: 50, 0 = unlimited)")
 	queryCmd.Flags().BoolP("all", "a", false, "Include closed issues (default: exclude closed)")
 	queryCmd.Flags().Bool("long", false, "Show detailed multi-line output for each issue")
@@ -313,5 +313,5 @@ func init() {
 	queryCmd.Flags().BoolP("reverse", "r", false, "Reverse sort order")
 	queryCmd.Flags().Bool("parse-only", false, "Only parse the query and show the AST (for debugging)")
 
-	rootCmd.AddCommand(queryCmd)
+	root.AddCommand(queryCmd)
 }

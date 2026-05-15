@@ -137,7 +137,7 @@ func parseGitHubSourceSystem(sourceSystem string) (number int, ok bool) {
 	return number, true
 }
 
-func init() {
+func registerGithubCmds(root *cobra.Command) {
 	// Add subcommands to github
 	githubCmd.AddCommand(githubSyncCmd)
 	githubCmd.AddCommand(githubStatusCmd)
@@ -155,7 +155,7 @@ func init() {
 	registerSelectiveSyncFlags(githubSyncCmd)
 
 	// Register github command with root
-	rootCmd.AddCommand(githubCmd)
+	root.AddCommand(githubCmd)
 }
 
 // getGitHubConfig returns GitHub configuration from bd config or environment.

@@ -100,10 +100,10 @@ Examples:
 	},
 }
 
-func init() {
+func registerCommentCmds(root *cobra.Command) {
 	commentCmd.Flags().Bool("stdin", false, "Read comment text from stdin")
 	commentCmd.Flags().String("file", "", "Read comment text from file")
 	commentCmd.MarkFlagsMutuallyExclusive("stdin", "file")
 	commentCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(commentCmd)
+	root.AddCommand(commentCmd)
 }

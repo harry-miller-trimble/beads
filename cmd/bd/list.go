@@ -1066,7 +1066,7 @@ var listCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerListCmds(root *cobra.Command) {
 	listCmd.Flags().StringP("status", "s", "", "Filter by stored status (open, in_progress, blocked, deferred, closed). Comma-separated for multiple: --status open,in_progress")
 	listCmd.Flags().String("state", "", "Alias for --status")
 	_ = listCmd.Flags().MarkHidden("state")
@@ -1163,5 +1163,5 @@ func init() {
 	listCmd.Flags().Bool("ready", false, "Show only ready issues (no active blockers, same semantics as bd ready)")
 
 	// Note: --json flag is defined as a persistent flag in main.go, not here
-	rootCmd.AddCommand(listCmd)
+	root.AddCommand(listCmd)
 }

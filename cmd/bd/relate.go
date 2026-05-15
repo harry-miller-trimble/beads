@@ -39,7 +39,7 @@ Example:
 	RunE: runUnrelate,
 }
 
-func init() {
+func registerRelateCmds() {
 	// Issue ID completions
 	relateCmd.ValidArgsFunction = issueIDCompletion
 	unrelateCmd.ValidArgsFunction = issueIDCompletion

@@ -136,9 +136,9 @@ Examples:
 	},
 }
 
-func init() {
+func registerFlattenCmds(root *cobra.Command) {
 	flattenCmd.Flags().BoolVar(&flattenDryRun, "dry-run", false, "Preview without making changes")
 	flattenCmd.Flags().BoolVarP(&flattenForce, "force", "f", false, "Confirm irreversible history squash")
 
-	rootCmd.AddCommand(flattenCmd)
+	root.AddCommand(flattenCmd)
 }

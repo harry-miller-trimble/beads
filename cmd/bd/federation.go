@@ -106,7 +106,7 @@ var federationListPeersCmd = &cobra.Command{
 	Run:   runFederationListPeers,
 }
 
-func init() {
+func registerFederationCmds(root *cobra.Command) {
 	// Add subcommands
 	federationCmd.AddCommand(federationSyncCmd)
 	federationCmd.AddCommand(federationStatusCmd)
@@ -126,7 +126,7 @@ func init() {
 	federationAddPeerCmd.Flags().StringVarP(&federationPassword, "password", "p", "", "SQL password (prompted if --user set without --password)")
 	federationAddPeerCmd.Flags().StringVar(&federationSov, "sovereignty", "", "Sovereignty tier (T1, T2, T3, T4)")
 
-	rootCmd.AddCommand(federationCmd)
+	root.AddCommand(federationCmd)
 }
 
 func getFederatedStore() (storage.DoltStorage, error) {

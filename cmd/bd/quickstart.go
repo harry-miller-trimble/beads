@@ -90,6 +90,6 @@ var quickstartCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(quickstartCmd)
+func registerQuickstartCmds(root *cobra.Command) {
+	root.AddCommand(quickstartCmd)
 }

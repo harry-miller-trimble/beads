@@ -90,8 +90,8 @@ Examples:
 	},
 }
 
-func init() {
+func registerLinkCmds(root *cobra.Command) {
 	linkCmd.Flags().StringP("type", "t", "blocks", "Dependency type (blocks|tracks|related|parent-child|discovered-from)")
 	linkCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(linkCmd)
+	root.AddCommand(linkCmd)
 }

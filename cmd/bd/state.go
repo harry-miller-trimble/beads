@@ -314,15 +314,15 @@ Example:
 	},
 }
 
-func init() {
+func registerStateCmds(root *cobra.Command) {
 	// set-state flags
 	setStateCmd.Flags().String("reason", "", "Reason for the state change (recorded in event)")
 
 	// Add subcommands
 	stateCmd.AddCommand(stateListCmd)
 
-	rootCmd.AddCommand(stateCmd)
-	rootCmd.AddCommand(setStateCmd)
+	root.AddCommand(stateCmd)
+	root.AddCommand(setStateCmd)
 }
 
 // Ensure ctx is available

@@ -153,7 +153,7 @@ Equivalent to: bd notion sync --pull --issues <refs>`,
 	RunE: runNotionPull,
 }
 
-func init() {
+func registerSyncPushPullCmds() {
 	// ADO push/pull
 	adoPushCmd.Flags().Bool("dry-run", false, "Preview push without making changes")
 	adoPullCmd.Flags().Bool("dry-run", false, "Preview pull without making changes")

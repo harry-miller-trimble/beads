@@ -1218,7 +1218,7 @@ func isTimeoutError(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
 }
 
-func init() {
+func registerDoltCmds(root *cobra.Command) {
 	doltSetCmd.Flags().Bool("update-config", false, "Also write to config.yaml for team-wide defaults")
 	doltStopCmd.Flags().Bool("force", false, "Force stop the server")
 	doltPushCmd.Flags().Bool("force", false, "Force push (overwrite remote changes)")
@@ -1242,7 +1242,7 @@ func init() {
 	doltCmd.AddCommand(doltKillallCmd)
 	doltCmd.AddCommand(doltCleanDatabasesCmd)
 	doltCmd.AddCommand(doltRemoteCmd)
-	rootCmd.AddCommand(doltCmd)
+	root.AddCommand(doltCmd)
 }
 
 func selectedDoltBeadsDir() string {

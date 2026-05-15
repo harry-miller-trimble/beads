@@ -215,7 +215,7 @@ func findGateReadyMolecules(ctx context.Context, s storage.DoltStorage) ([]*Gate
 	return molecules, nil
 }
 
-func init() {
+func registerMolReadyGatedCmds() {
 	// Note: --gated flag is registered in ready.go
 	// Also add as a subcommand under mol for discoverability
 	molCmd.AddCommand(molReadyGatedCmd)

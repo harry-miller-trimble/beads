@@ -90,9 +90,9 @@ func issueContentSize(issue *types.Issue) int {
 	return len(issue.Description) + len(issue.Design) + len(issue.AcceptanceCriteria) + len(issue.Notes)
 }
 
-func init() {
+func registerRestoreCmds(root *cobra.Command) {
 	restoreCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output restore results in JSON format")
-	rootCmd.AddCommand(restoreCmd)
+	root.AddCommand(restoreCmd)
 }
 
 // displayRestoredIssue displays the restored issue in a readable format

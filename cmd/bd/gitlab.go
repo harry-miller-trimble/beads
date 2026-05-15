@@ -170,7 +170,7 @@ func parseGitLabSourceSystem(sourceSystem string) (projectID, iid int, ok bool) 
 	return projectID, iid, true
 }
 
-func init() {
+func registerGitlabCmds(root *cobra.Command) {
 	// Add subcommands to gitlab
 	gitlabCmd.AddCommand(gitlabSyncCmd)
 	gitlabCmd.AddCommand(gitlabStatusCmd)
@@ -199,7 +199,7 @@ func init() {
 	gitlabSyncCmd.Flags().BoolVar(&gitlabNoEphemeral, "no-ephemeral", true, "Exclude ephemeral/wisp issues from push (default: true)")
 
 	// Register gitlab command with root
-	rootCmd.AddCommand(gitlabCmd)
+	root.AddCommand(gitlabCmd)
 }
 
 // getGitLabConfig returns GitLab configuration from bd config or environment.

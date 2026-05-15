@@ -775,7 +775,7 @@ func printLargeMoleculeSummary(stats *types.MoleculeProgressStats) {
 	}
 }
 
-func init() {
+func registerMolCurrentCmds() {
 	molCurrentCmd.Flags().String("for", "", "Show molecules for a specific agent/assignee")
 	molCurrentCmd.Flags().Int("limit", 0, "Maximum number of steps to display (0 = auto, use 'all' threshold)")
 	molCurrentCmd.Flags().String("range", "", "Display specific step range (e.g., '1-50', '100-150')")

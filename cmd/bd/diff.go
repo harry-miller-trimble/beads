@@ -140,6 +140,6 @@ func joinStrings(strs []string, sep string) string {
 	return result
 }
 
-func init() {
-	rootCmd.AddCommand(diffCmd)
+func registerDiffCmds(root *cobra.Command) {
+	root.AddCommand(diffCmd)
 }

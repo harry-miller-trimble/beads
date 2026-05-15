@@ -65,7 +65,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerConfigApplyCmds() {
 	configApplyCmd.Flags().Bool("dry-run", false, "Show what would change without making modifications")
 	configCmd.AddCommand(configApplyCmd)
 }

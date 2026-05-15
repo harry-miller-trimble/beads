@@ -644,7 +644,7 @@ var rulesCompactCmd = &cobra.Command{
 	Run:   runRulesCompact,
 }
 
-func init() {
+func registerRulesCmds(root *cobra.Command) {
 	// Audit command flags
 	rulesAuditCmd.Flags().String("path", ".claude/rules/", "Path to rules directory")
 	rulesAuditCmd.Flags().Float64("threshold", 0.6, "Jaccard similarity threshold")
@@ -658,7 +658,7 @@ func init() {
 	// Register subcommands
 	rulesCmd.AddCommand(rulesAuditCmd)
 	rulesCmd.AddCommand(rulesCompactCmd)
-	rootCmd.AddCommand(rulesCmd)
+	root.AddCommand(rulesCmd)
 }
 
 func runRulesAudit(cmd *cobra.Command, args []string) {

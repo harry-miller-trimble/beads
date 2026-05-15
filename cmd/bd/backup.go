@@ -106,7 +106,7 @@ var backupStatusCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerBackupCmds(root *cobra.Command) {
 	backupCmd.AddCommand(backupStatusCmd)
-	rootCmd.AddCommand(backupCmd)
+	root.AddCommand(backupCmd)
 }

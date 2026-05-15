@@ -451,8 +451,8 @@ func printCreatedIssue(issue *types.Issue) {
 	}
 }
 
-func init() {
+func registerCreateFormCmds(root *cobra.Command) {
 	// Note: --json flag is defined as a persistent flag in main.go
 	createFormCmd.Flags().String("parent", "", "Parent issue ID for creating a hierarchical child (e.g., 'bd-a3f8e9')")
-	rootCmd.AddCommand(createFormCmd)
+	root.AddCommand(createFormCmd)
 }

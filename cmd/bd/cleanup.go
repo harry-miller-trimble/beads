@@ -169,7 +169,7 @@ SEE ALSO:
 	},
 }
 
-func init() {
+func registerCleanupCmds() {
 	cleanupCmd.Flags().BoolP("force", "f", false, "Actually delete (without this flag, shows error)")
 	cleanupCmd.Flags().Bool("dry-run", false, "Preview what would be deleted without making changes")
 	cleanupCmd.Flags().Bool("cascade", false, "Recursively delete all dependent issues")

@@ -29,6 +29,6 @@ each maintaining their own Dolt database while sharing updates via remotes.`,
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(federationCmd)
+func registerFederationCmds(root *cobra.Command) {
+	root.AddCommand(federationCmd)
 }

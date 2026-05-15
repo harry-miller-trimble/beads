@@ -200,10 +200,10 @@ Examples:
 	},
 }
 
-func init() {
+func registerCompactDoltCmds(root *cobra.Command) {
 	compactDoltCmd.Flags().BoolVar(&compactDoltDryRun, "dry-run", false, "Preview without making changes")
 	compactDoltCmd.Flags().BoolVarP(&compactDoltForce, "force", "f", false, "Confirm commit squash")
 	compactDoltCmd.Flags().IntVar(&compactDoltDays, "days", 30, "Keep commits newer than N days")
 
-	rootCmd.AddCommand(compactDoltCmd)
+	root.AddCommand(compactDoltCmd)
 }

@@ -238,12 +238,12 @@ Examples:
 	},
 }
 
-func init() {
+func registerGcCmds(root *cobra.Command) {
 	gcCmd.Flags().BoolVar(&gcDryRun, "dry-run", false, "Preview without making changes")
 	gcCmd.Flags().BoolVarP(&gcForce, "force", "f", false, "Skip confirmation prompts")
 	gcCmd.Flags().IntVar(&gcOlderThan, "older-than", 90, "Delete closed issues older than N days")
 	gcCmd.Flags().BoolVar(&gcSkipDecay, "skip-decay", false, "Skip issue deletion phase")
 	gcCmd.Flags().BoolVar(&gcSkipDolt, "skip-dolt", false, "Skip Dolt garbage collection phase")
 
-	rootCmd.AddCommand(gcCmd)
+	root.AddCommand(gcCmd)
 }

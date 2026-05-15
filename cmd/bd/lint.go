@@ -160,9 +160,9 @@ Examples:
 	},
 }
 
-func init() {
+func registerLintCmds(root *cobra.Command) {
 	lintCmd.Flags().StringP("type", "t", "", "Filter by issue type (bug, task, feature, epic)")
 	lintCmd.Flags().StringP("status", "s", "", "Filter by status (default: open, use 'all' for all)")
 
-	rootCmd.AddCommand(lintCmd)
+	root.AddCommand(lintCmd)
 }

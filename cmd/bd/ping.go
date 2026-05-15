@@ -89,6 +89,6 @@ func pingFail(start time.Time, reason string) {
 	os.Exit(1)
 }
 
-func init() {
-	rootCmd.AddCommand(pingCmd)
+func registerPingCmds(root *cobra.Command) {
+	root.AddCommand(pingCmd)
 }

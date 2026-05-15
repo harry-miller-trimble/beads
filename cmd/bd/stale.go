@@ -70,10 +70,10 @@ func displayStaleIssues(issues []*types.Issue, days int) {
 		fmt.Println()
 	}
 }
-func init() {
+func registerStaleCmds(root *cobra.Command) {
 	staleCmd.Flags().IntP("days", "d", 30, "Issues not updated in this many days")
 	staleCmd.Flags().StringP("status", "s", "", "Filter by status (open|in_progress|blocked|deferred)")
 	staleCmd.Flags().IntP("limit", "n", 50, "Maximum issues to show")
 	// Note: --json flag is defined as a persistent flag in main.go, not here
-	rootCmd.AddCommand(staleCmd)
+	root.AddCommand(staleCmd)
 }

@@ -55,13 +55,13 @@ Examples:
 	Run: runPreflight,
 }
 
-func init() {
+func registerPreflightCmds(root *cobra.Command) {
 	preflightCmd.Flags().Bool("check", false, "Run checks automatically")
 	preflightCmd.Flags().Bool("fix", false, "Auto-fix issues where possible (not yet implemented)")
 	preflightCmd.Flags().Bool("json", false, "Output results as JSON")
 	preflightCmd.Flags().Bool("skip-lint", false, "Skip lint check explicitly")
 
-	rootCmd.AddCommand(preflightCmd)
+	root.AddCommand(preflightCmd)
 }
 
 func runPreflight(cmd *cobra.Command, args []string) {

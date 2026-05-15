@@ -1472,7 +1472,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 	},
 }
 
-func init() {
+func registerInitCmds(root *cobra.Command) {
 	initCmd.Flags().StringP("prefix", "p", "", "Issue prefix (default: current directory name)")
 	initCmd.Flags().BoolP("quiet", "q", false, "Suppress output (quiet mode)")
 	initCmd.Flags().Bool("contributor", false, "Run OSS contributor setup wizard")
@@ -1512,7 +1512,7 @@ func init() {
 	initCmd.Flags().String("proxied-server-log-path", "", "[EXPERIMENTAL] Path to the proxied dolt sql-server log file (proxied-server mode only). Default: <beadsDir>/proxieddb/server.log.")
 	initCmd.Flags().String("proxied-server-root-path", "", "[EXPERIMENTAL] Directory holding the proxied dolt sql-server's lockfiles, pidfiles, and child .dolt repository (proxied-server mode only). Default: <beadsDir>/proxieddb. May not exist yet — bd will create it.")
 
-	rootCmd.AddCommand(initCmd)
+	root.AddCommand(initCmd)
 }
 
 // migrateOldDatabases detects and migrates old database files to beads.db

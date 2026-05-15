@@ -185,6 +185,6 @@ func findOriginalBeadsDir() string {
 	return ""
 }
 
-func init() {
-	rootCmd.AddCommand(whereCmd)
+func registerWhereCmds(root *cobra.Command) {
+	root.AddCommand(whereCmd)
 }

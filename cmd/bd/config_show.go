@@ -63,7 +63,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerConfigShowCmds() {
 	configShowCmd.Flags().String("source", "", "Filter by source (e.g., config.yaml, env, default, metadata, database, git)")
 	configCmd.AddCommand(configShowCmd)
 }

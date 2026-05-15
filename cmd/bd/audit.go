@@ -146,7 +146,7 @@ var auditLabelCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerAuditCmds(root *cobra.Command) {
 	auditRecordCmd.Flags().StringVar(&auditRecordKind, "kind", "", "Entry kind (e.g. llm_call, tool_call, label)")
 	auditRecordCmd.Flags().StringVar(&auditRecordModel, "model", "", "Model name (llm_call)")
 	auditRecordCmd.Flags().StringVar(&auditRecordPrompt, "prompt", "", "Prompt text (llm_call)")
@@ -165,5 +165,5 @@ func init() {
 
 	auditCmd.AddCommand(auditRecordCmd)
 	auditCmd.AddCommand(auditLabelCmd)
-	rootCmd.AddCommand(auditCmd)
+	root.AddCommand(auditCmd)
 }

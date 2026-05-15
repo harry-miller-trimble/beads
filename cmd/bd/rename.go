@@ -32,8 +32,8 @@ Note: The new ID must use a valid prefix for this database.`,
 	RunE: runRename,
 }
 
-func init() {
-	rootCmd.AddCommand(renameCmd)
+func registerRenameCmds(root *cobra.Command) {
+	root.AddCommand(renameCmd)
 }
 
 func runRename(cmd *cobra.Command, args []string) error {

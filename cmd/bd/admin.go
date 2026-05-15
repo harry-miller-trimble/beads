@@ -34,8 +34,8 @@ For routine maintenance, prefer 'bd doctor --fix' which handles common repairs
 automatically. Use these admin commands for targeted database operations.`,
 }
 
-func init() {
-	rootCmd.AddCommand(adminCmd)
+func registerAdminCmds(root *cobra.Command) {
+	root.AddCommand(adminCmd)
 	adminCmd.AddCommand(cleanupCmd)
 	adminCmd.AddCommand(compactCmd)
 	adminCmd.AddCommand(resetCmd)

@@ -596,11 +596,11 @@ func uniqueStrings(slice []string) []string {
 	return result
 }
 
-func init() {
+func registerDeleteCmds(root *cobra.Command) {
 	deleteCmd.Flags().BoolP("force", "f", false, "Actually delete (without this flag, shows preview)")
 	deleteCmd.Flags().String("from-file", "", "Read issue IDs from file (one per line)")
 	deleteCmd.Flags().Bool("dry-run", false, "Preview what would be deleted without making changes")
 	deleteCmd.Flags().Bool("cascade", false, "Recursively delete all dependent issues")
 	deleteCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(deleteCmd)
+	root.AddCommand(deleteCmd)
 }

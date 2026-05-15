@@ -142,9 +142,9 @@ func runShip(cmd *cobra.Command, args []string) {
 	commandDidWrite.Store(true)
 }
 
-func init() {
+func registerShipCmds(root *cobra.Command) {
 	shipCmd.Flags().Bool("force", false, "Ship even if issue is not closed")
 	shipCmd.Flags().Bool("dry-run", false, "Preview without making changes")
 
-	rootCmd.AddCommand(shipCmd)
+	root.AddCommand(shipCmd)
 }

@@ -179,11 +179,11 @@ normal 'bd' subcommands for interactive/read operations.`,
 	},
 }
 
-func init() {
+func registerBatchCmds(root *cobra.Command) {
 	batchCmd.Flags().StringP("file", "f", "", "Read commands from file instead of stdin")
 	batchCmd.Flags().Bool("dry-run", false, "Parse input and echo commands without executing")
 	batchCmd.Flags().StringP("message", "m", "", "DOLT_COMMIT message (default: 'bd: batch N ops by <actor>')")
-	rootCmd.AddCommand(batchCmd)
+	root.AddCommand(batchCmd)
 }
 
 // batchOp is one parsed command line.

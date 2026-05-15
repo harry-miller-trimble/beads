@@ -342,7 +342,7 @@ func outputSearchResults(issues []*types.Issue, query string, longFormat bool) {
 	}
 }
 
-func init() {
+func registerSearchCmds(root *cobra.Command) {
 	searchCmd.Flags().String("query", "", "Search query (alternative to positional argument)")
 	searchCmd.Flags().StringP("status", "s", "", "Filter by stored status (open, in_progress, blocked, deferred, closed, all). Default excludes closed; use 'all' to include closed. Note: dependency-blocked issues use 'bd blocked'")
 	searchCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
@@ -380,5 +380,5 @@ func init() {
 	searchCmd.Flags().StringArray("metadata-field", nil, "Filter by metadata field (key=value, repeatable)")
 	searchCmd.Flags().String("has-metadata-key", "", "Filter issues that have this metadata key set")
 
-	rootCmd.AddCommand(searchCmd)
+	root.AddCommand(searchCmd)
 }

@@ -591,7 +591,7 @@ func toJSONValue(s string) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-func init() {
+func registerUpdateCmds(root *cobra.Command) {
 	updateCmd.Flags().StringP("status", "s", "", "New status")
 	registerPriorityFlag(updateCmd, "")
 	updateCmd.Flags().String("title", "", "New title")
@@ -632,5 +632,5 @@ func init() {
 	updateCmd.Flags().StringArray("set-metadata", nil, "Set metadata key=value (repeatable, e.g., --set-metadata team=platform)")
 	updateCmd.Flags().StringArray("unset-metadata", nil, "Remove metadata key (repeatable, e.g., --unset-metadata team)")
 	updateCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(updateCmd)
+	root.AddCommand(updateCmd)
 }

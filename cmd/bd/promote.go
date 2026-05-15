@@ -85,8 +85,8 @@ Examples:
 	},
 }
 
-func init() {
+func registerPromoteCmds(root *cobra.Command) {
 	promoteCmd.Flags().StringP("reason", "r", "", "Reason for promotion")
 	promoteCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(promoteCmd)
+	root.AddCommand(promoteCmd)
 }

@@ -79,7 +79,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerAssignCmds(root *cobra.Command) {
 	assignCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(assignCmd)
+	root.AddCommand(assignCmd)
 }

@@ -88,7 +88,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerPriorityCmds(root *cobra.Command) {
 	priorityCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(priorityCmd)
+	root.AddCommand(priorityCmd)
 }

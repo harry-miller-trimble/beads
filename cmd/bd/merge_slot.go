@@ -92,7 +92,7 @@ var (
 	mergeSlotAddWaiter bool
 )
 
-func init() {
+func registerMergeSlotCmds(root *cobra.Command) {
 	mergeSlotAcquireCmd.Flags().StringVar(&mergeSlotHolder, "holder", "", "Who is acquiring the slot (default: BEADS_ACTOR)")
 	mergeSlotAcquireCmd.Flags().BoolVar(&mergeSlotAddWaiter, "wait", false, "Add to waiters list if slot is held")
 	mergeSlotReleaseCmd.Flags().StringVar(&mergeSlotHolder, "holder", "", "Who is releasing the slot (for verification)")
@@ -101,7 +101,7 @@ func init() {
 	mergeSlotCmd.AddCommand(mergeSlotCheckCmd)
 	mergeSlotCmd.AddCommand(mergeSlotAcquireCmd)
 	mergeSlotCmd.AddCommand(mergeSlotReleaseCmd)
-	rootCmd.AddCommand(mergeSlotCmd)
+	root.AddCommand(mergeSlotCmd)
 }
 
 func runMergeSlotCreate(cmd *cobra.Command, args []string) error {

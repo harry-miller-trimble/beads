@@ -431,7 +431,7 @@ func runJunieRecipe() {
 	setup.InstallJunie()
 }
 
-func init() {
+func registerSetupCmds(root *cobra.Command) {
 	// Global flags for the setup command
 	setupCmd.Flags().BoolVar(&setupList, "list", false, "List all available recipes")
 	setupCmd.Flags().BoolVar(&setupPrint, "print", false, "Print the template to stdout")
@@ -445,5 +445,5 @@ func init() {
 	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Install globally (claude/codex/mux; writes to ~/.claude/settings.json, $CODEX_HOME/AGENTS.md or ~/.codex/AGENTS.md, or ~/.mux/AGENTS.md)")
 	setupCmd.Flags().BoolVar(&setupStealth, "stealth", false, "Use stealth mode (claude/gemini)")
 
-	rootCmd.AddCommand(setupCmd)
+	root.AddCommand(setupCmd)
 }

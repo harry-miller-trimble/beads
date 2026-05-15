@@ -72,7 +72,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerTagCmds(root *cobra.Command) {
 	tagCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(tagCmd)
+	root.AddCommand(tagCmd)
 }

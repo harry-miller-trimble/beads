@@ -190,7 +190,7 @@ var doneTodoCmd = &cobra.Command{
 	},
 }
 
-func init() {
+func registerTodoCmds(root *cobra.Command) {
 	// Add subcommands
 	todoCmd.AddCommand(addTodoCmd)
 	todoCmd.AddCommand(listTodosCmd)
@@ -205,7 +205,7 @@ func init() {
 	doneTodoCmd.Flags().String("reason", "", "Reason for closing (default: Completed)")
 
 	// Register with root
-	rootCmd.AddCommand(todoCmd)
+	root.AddCommand(todoCmd)
 }
 
 // todoTruncate truncates a string to the specified length with ellipsis

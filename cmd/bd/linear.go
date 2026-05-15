@@ -167,7 +167,7 @@ Example:
 	Run: runLinearTeams,
 }
 
-func init() {
+func registerLinearCmds(root *cobra.Command) {
 	linearSyncCmd.Flags().Bool("pull", false, "Pull issues from Linear")
 	linearSyncCmd.Flags().Bool("push", false, "Push issues to Linear")
 	linearSyncCmd.Flags().Bool("dry-run", false, "Preview sync without making changes")
@@ -191,7 +191,7 @@ func init() {
 	linearCmd.AddCommand(linearSyncCmd)
 	linearCmd.AddCommand(linearStatusCmd)
 	linearCmd.AddCommand(linearTeamsCmd)
-	rootCmd.AddCommand(linearCmd)
+	root.AddCommand(linearCmd)
 }
 
 func runLinearSync(cmd *cobra.Command, args []string) {

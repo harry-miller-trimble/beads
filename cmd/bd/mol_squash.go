@@ -299,7 +299,7 @@ func squashMolecule(ctx context.Context, s storage.DoltStorage, root *types.Issu
 	return result, nil
 }
 
-func init() {
+func registerMolSquashCmds() {
 	molSquashCmd.Flags().Bool("dry-run", false, "Preview what would be squashed")
 	molSquashCmd.Flags().Bool("keep-children", false, "Don't delete ephemeral children after squash")
 	molSquashCmd.Flags().String("summary", "", "Agent-provided summary (bypasses auto-generation)")

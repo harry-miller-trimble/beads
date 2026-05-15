@@ -84,8 +84,8 @@ Examples:
 	},
 }
 
-func init() {
+func registerHistoryCmds(root *cobra.Command) {
 	historyCmd.Flags().IntVar(&historyLimit, "limit", 0, "Limit number of history entries (0 = all)")
 	historyCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(historyCmd)
+	root.AddCommand(historyCmd)
 }

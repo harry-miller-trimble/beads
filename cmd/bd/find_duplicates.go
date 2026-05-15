@@ -56,13 +56,13 @@ Examples:
 	Run: runFindDuplicates,
 }
 
-func init() {
+func registerFindDuplicatesCmds(root *cobra.Command) {
 	findDuplicatesCmd.Flags().String("method", "mechanical", "Detection method: mechanical, ai")
 	findDuplicatesCmd.Flags().Float64("threshold", 0.5, "Similarity threshold (0.0-1.0, lower = more results)")
 	findDuplicatesCmd.Flags().StringP("status", "s", "", "Filter by status (default: non-closed)")
 	findDuplicatesCmd.Flags().IntP("limit", "n", 50, "Maximum number of pairs to show")
 	findDuplicatesCmd.Flags().String("model", "", "AI model to use (only with --method ai; default from config ai.model)")
-	rootCmd.AddCommand(findDuplicatesCmd)
+	root.AddCommand(findDuplicatesCmd)
 }
 
 // duplicatePair represents a pair of potentially duplicate issues.

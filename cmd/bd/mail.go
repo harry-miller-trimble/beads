@@ -105,6 +105,6 @@ func findMailDelegate() string {
 	return ""
 }
 
-func init() {
-	rootCmd.AddCommand(mailCmd)
+func registerMailCmds(root *cobra.Command) {
+	root.AddCommand(mailCmd)
 }

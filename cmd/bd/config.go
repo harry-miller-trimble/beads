@@ -857,7 +857,7 @@ func levenshteinDistance(a, b string) int {
 	return prev[lb]
 }
 
-func init() {
+func registerConfigCmds(root *cobra.Command) {
 	configSetCmd.Flags().BoolVar(&forceGitTracked, "force-git-tracked", false, "Allow writing secret keys to git-tracked config files (use with caution)")
 	configSetManyCmd.Flags().BoolVar(&forceGitTracked, "force-git-tracked", false, "Allow writing secret keys to git-tracked config files (use with caution)")
 
@@ -867,5 +867,5 @@ func init() {
 	configCmd.AddCommand(configListCmd)
 	configCmd.AddCommand(configUnsetCmd)
 	configCmd.AddCommand(configValidateCmd)
-	rootCmd.AddCommand(configCmd)
+	root.AddCommand(configCmd)
 }

@@ -547,7 +547,7 @@ func getParallelAnnotation(info *ParallelInfo) string {
 	return " [" + strings.Join(parts, " | ") + "]"
 }
 
-func init() {
+func registerMolShowCmds() {
 	molShowCmd.Flags().BoolVarP(&molShowParallel, "parallel", "p", false, "Show parallel step analysis")
 	molCmd.AddCommand(molShowCmd)
 }

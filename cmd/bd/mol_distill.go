@@ -355,7 +355,7 @@ func subgraphToFormula(subgraph *TemplateSubgraph, name string, replacements map
 	}
 }
 
-func init() {
+func registerMolDistillCmds() {
 	molDistillCmd.Flags().StringArray("var", []string{}, "Replace value with {{variable}} placeholder (variable=value)")
 	molDistillCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	molDistillCmd.Flags().String("output", "", "Output directory for formula file")

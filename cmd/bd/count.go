@@ -295,7 +295,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerCountCmds(root *cobra.Command) {
 	// Filter flags (same as list command)
 	countCmd.Flags().StringP("status", "s", "", "Filter by stored status (open, in_progress, blocked, deferred, closed). Note: dependency-blocked issues use 'bd blocked'")
 	countCmd.Flags().IntP("priority", "p", 0, "Filter by priority (0-4: 0=critical, 1=high, 2=medium, 3=low, 4=backlog)")
@@ -335,5 +335,5 @@ func init() {
 	countCmd.Flags().Bool("by-assignee", false, "Group count by assignee")
 	countCmd.Flags().Bool("by-label", false, "Group count by label")
 
-	rootCmd.AddCommand(countCmd)
+	root.AddCommand(countCmd)
 }

@@ -1175,7 +1175,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerSwarmCmds(root *cobra.Command) {
 	swarmValidateCmd.Flags().Bool("verbose", false, "Include detailed issue graph in output")
 	swarmCreateCmd.Flags().String("coordinator", "", "Coordinator address (e.g., my-project/witness)")
 	swarmCreateCmd.Flags().Bool("force", false, "Create new swarm even if one already exists")
@@ -1184,5 +1184,5 @@ func init() {
 	swarmCmd.AddCommand(swarmStatusCmd)
 	swarmCmd.AddCommand(swarmCreateCmd)
 	swarmCmd.AddCommand(swarmListCmd)
-	rootCmd.AddCommand(swarmCmd)
+	root.AddCommand(swarmCmd)
 }

@@ -657,7 +657,7 @@ Example:
 	},
 }
 
-func init() {
+func registerMigrateCmds(root *cobra.Command) {
 	migrateCmd.Flags().Bool("yes", false, "Auto-confirm prompts")
 	migrateCmd.Flags().Bool("dry-run", false, "Show what would be done without making changes")
 	migrateCmd.Flags().Bool("update-repo-id", false, "Update repository ID (use after changing git remote)")
@@ -674,5 +674,5 @@ func init() {
 	migrateHooksCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	migrateCmd.AddCommand(migrateHooksCmd)
 
-	rootCmd.AddCommand(migrateCmd)
+	root.AddCommand(migrateCmd)
 }

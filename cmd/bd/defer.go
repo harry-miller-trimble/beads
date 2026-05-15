@@ -105,9 +105,9 @@ Examples:
 	},
 }
 
-func init() {
+func registerDeferCmds(root *cobra.Command) {
 	// Time-based scheduling flag (GH#820)
 	deferCmd.Flags().String("until", "", "Defer until specific time (e.g., +1h, tomorrow, next monday)")
 	deferCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(deferCmd)
+	root.AddCommand(deferCmd)
 }

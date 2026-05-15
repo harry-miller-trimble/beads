@@ -205,10 +205,10 @@ func closeIssue(issueID string) error {
 	return closeIssueRunner(issueID)
 }
 
-func init() {
+func registerOrphansCmds(root *cobra.Command) {
 	orphansCmd.Flags().BoolP("fix", "f", false, "Close orphaned issues with confirmation")
 	orphansCmd.Flags().Bool("details", false, "Show full commit information")
 	orphansCmd.Flags().StringSliceP("label", "l", []string{}, "Filter by labels (AND: must have ALL). Can combine with --label-any")
 	orphansCmd.Flags().StringSlice("label-any", []string{}, "Filter by labels (OR: must have AT LEAST ONE). Can combine with --label")
-	rootCmd.AddCommand(orphansCmd)
+	root.AddCommand(orphansCmd)
 }

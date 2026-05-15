@@ -58,7 +58,7 @@ To initialize and restore in one step, use: bd init && bd backup restore`,
 	},
 }
 
-func init() {
+func registerBackupRestoreCmds() {
 	backupRestoreCmd.Flags().Bool("force", false, "Overwrite existing database with backup contents")
 	backupCmd.AddCommand(backupRestoreCmd)
 }

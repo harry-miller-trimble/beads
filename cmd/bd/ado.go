@@ -135,7 +135,7 @@ func getADOConflictStrategy(preferLocal, preferADO, preferNewer bool) (ADOConfli
 	return ADOConflictPreferNewer, nil
 }
 
-func init() {
+func registerAdoCmds(root *cobra.Command) {
 	// Add subcommands to ado
 	adoCmd.AddCommand(adoSyncCmd)
 	adoCmd.AddCommand(adoStatusCmd)
@@ -165,7 +165,7 @@ func init() {
 	registerSelectiveSyncFlags(adoSyncCmd)
 
 	// Register ado command with root
-	rootCmd.AddCommand(adoCmd)
+	root.AddCommand(adoCmd)
 }
 
 // getADOConfig returns Azure DevOps configuration from bd config or environment.

@@ -116,10 +116,10 @@ Examples:
 	},
 }
 
-func init() {
+func registerNoteCmds(root *cobra.Command) {
 	noteCmd.Flags().Bool("stdin", false, "Read note text from stdin")
 	noteCmd.Flags().String("file", "", "Read note text from file")
 	noteCmd.MarkFlagsMutuallyExclusive("stdin", "file")
 	noteCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(noteCmd)
+	root.AddCommand(noteCmd)
 }

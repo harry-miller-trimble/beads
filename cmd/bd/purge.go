@@ -316,10 +316,10 @@ func parseHumanDuration(s string) (int, error) {
 	}
 }
 
-func init() {
+func registerPurgeCmds(root *cobra.Command) {
 	purgeCmd.Flags().BoolP("force", "f", false, "Actually purge (without this, shows preview)")
 	purgeCmd.Flags().Bool("dry-run", false, "Preview what would be purged with stats")
 	purgeCmd.Flags().String("older-than", "", "Only purge beads closed more than N ago (e.g., 7d, 2w, 30)")
 	purgeCmd.Flags().String("pattern", "", "Only purge beads matching ID glob pattern (e.g., *-wisp-*)")
-	rootCmd.AddCommand(purgeCmd)
+	root.AddCommand(purgeCmd)
 }

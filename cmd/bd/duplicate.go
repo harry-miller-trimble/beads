@@ -44,16 +44,16 @@ var (
 	supersededWith string
 )
 
-func init() {
+func registerDuplicateCmds(root *cobra.Command) {
 	duplicateCmd.Flags().StringVar(&duplicateOf, "of", "", "Canonical issue ID (required)")
 	_ = duplicateCmd.MarkFlagRequired("of") // Only fails if flag missing (caught in tests)
 	duplicateCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(duplicateCmd)
+	root.AddCommand(duplicateCmd)
 
 	supersedeCmd.Flags().StringVar(&supersededWith, "with", "", "Replacement issue ID (required)")
 	_ = supersedeCmd.MarkFlagRequired("with") // Only fails if flag missing (caught in tests)
 	supersedeCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(supersedeCmd)
+	root.AddCommand(supersedeCmd)
 }
 
 func runDuplicate(cmd *cobra.Command, args []string) error {

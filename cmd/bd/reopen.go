@@ -78,8 +78,8 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 	},
 }
 
-func init() {
+func registerReopenCmds(root *cobra.Command) {
 	reopenCmd.Flags().StringP("reason", "r", "", "Reason for reopening")
 	reopenCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(reopenCmd)
+	root.AddCommand(reopenCmd)
 }

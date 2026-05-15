@@ -178,12 +178,12 @@ Examples:
 	},
 }
 
-func init() {
+func registerEditCmds(root *cobra.Command) {
 	editCmd.Flags().Bool("title", false, "Edit the title")
 	editCmd.Flags().Bool("description", false, "Edit the description (default)")
 	editCmd.Flags().Bool("design", false, "Edit the design notes")
 	editCmd.Flags().Bool("notes", false, "Edit the notes")
 	editCmd.Flags().Bool("acceptance", false, "Edit the acceptance criteria")
 	editCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(editCmd)
+	root.AddCommand(editCmd)
 }

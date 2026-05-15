@@ -652,7 +652,7 @@ func looksLikeFormulaName(operand string) bool {
 	return false
 }
 
-func init() {
+func registerMolBondCmds() {
 	molBondCmd.Flags().String("type", types.BondTypeSequential, "Bond type: sequential, parallel, or conditional")
 	molBondCmd.Flags().String("as", "", "Custom title for compound proto (proto+proto only)")
 	molBondCmd.Flags().Bool("dry-run", false, "Preview what would be created")

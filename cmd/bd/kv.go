@@ -232,7 +232,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerKvCmds(root *cobra.Command) {
 	// Register all kv subcommands under kvCmd
 	kvCmd.AddCommand(kvSetCmd)
 	kvCmd.AddCommand(kvGetCmd)
@@ -240,5 +240,5 @@ func init() {
 	kvCmd.AddCommand(kvListCmd)
 
 	// Register kv command
-	rootCmd.AddCommand(kvCmd)
+	root.AddCommand(kvCmd)
 }

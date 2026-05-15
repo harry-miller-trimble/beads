@@ -74,7 +74,7 @@ var jiraStatusCmd = &cobra.Command{
 	Run: runJiraStatus,
 }
 
-func init() {
+func registerJiraCmds(root *cobra.Command) {
 	jiraSyncCmd.Flags().Bool("pull", false, "Pull issues from Jira")
 	jiraSyncCmd.Flags().Bool("push", false, "Push issues to Jira")
 	jiraSyncCmd.Flags().Bool("dry-run", false, "Preview sync without making changes")
@@ -87,7 +87,7 @@ func init() {
 
 	jiraCmd.AddCommand(jiraSyncCmd)
 	jiraCmd.AddCommand(jiraStatusCmd)
-	rootCmd.AddCommand(jiraCmd)
+	root.AddCommand(jiraCmd)
 }
 
 func runJiraSync(cmd *cobra.Command, args []string) {

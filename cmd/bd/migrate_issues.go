@@ -645,7 +645,7 @@ func loadIDsFromFile(path string) ([]string, error) {
 	return ids, nil
 }
 
-func init() {
+func registerMigrateIssuesCmds(root *cobra.Command) {
 	migrateCmd.AddCommand(migrateIssuesCmd)
 
 	migrateIssuesCmd.Flags().String("from", "", "Source repository (required)")
@@ -670,5 +670,5 @@ func init() {
 	migrateIssuesAliasCmd.Use = "migrate-issues"
 	migrateIssuesAliasCmd.Hidden = true
 	migrateIssuesAliasCmd.Deprecated = "use 'bd migrate issues' instead (will be removed in v1.0.0)"
-	rootCmd.AddCommand(&migrateIssuesAliasCmd)
+	root.AddCommand(&migrateIssuesAliasCmd)
 }

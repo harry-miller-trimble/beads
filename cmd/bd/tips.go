@@ -398,6 +398,6 @@ func syncConflictCondition() bool {
 }
 
 // init initializes the tip system with default tips
-func init() {
+func registerTips() {
 	initDefaultTips()
 }

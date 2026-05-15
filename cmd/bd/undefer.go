@@ -89,7 +89,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerUndeferCmds(root *cobra.Command) {
 	undeferCmd.ValidArgsFunction = issueIDCompletion
-	rootCmd.AddCommand(undeferCmd)
+	root.AddCommand(undeferCmd)
 }

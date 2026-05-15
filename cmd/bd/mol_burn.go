@@ -405,7 +405,7 @@ func burnWisps(ctx context.Context, s storage.DoltStorage, ids []string) (*BurnR
 	return result, nil
 }
 
-func init() {
+func registerMolBurnCmds() {
 	molBurnCmd.Flags().Bool("dry-run", false, "Preview what would be deleted")
 	molBurnCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	molBurnCmd.Flags().BoolP("yes", "y", false, "Alias for --force (skip confirmation)")

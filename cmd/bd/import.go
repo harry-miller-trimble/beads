@@ -76,11 +76,11 @@ var (
 	importInput  string
 )
 
-func init() {
+func registerImportCmds(root *cobra.Command) {
 	importCmd.Flags().StringVarP(&importInput, "input", "i", "", "Read JSONL from a specific file")
 	importCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "Show what would be imported without importing")
 	importCmd.Flags().BoolVar(&importDedup, "dedup", false, "Skip lines whose title matches an existing open issue")
-	rootCmd.AddCommand(importCmd)
+	root.AddCommand(importCmd)
 }
 
 func runImport(cmd *cobra.Command, args []string) error {

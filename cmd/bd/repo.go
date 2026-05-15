@@ -437,7 +437,7 @@ func parseIssuesFromJSONL(path string) ([]*types.Issue, error) {
 	return issues, nil
 }
 
-func init() {
+func registerRepoCmds(root *cobra.Command) {
 	repoCmd.AddCommand(repoAddCmd)
 	repoCmd.AddCommand(repoRemoveCmd)
 	repoCmd.AddCommand(repoListCmd)
@@ -449,5 +449,5 @@ func init() {
 	repoSyncCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output JSON")
 	repoSyncCmd.Flags().Bool("verbose", false, "Show detailed sync progress")
 
-	rootCmd.AddCommand(repoCmd)
+	root.AddCommand(repoCmd)
 }

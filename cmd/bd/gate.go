@@ -870,7 +870,7 @@ func escalateGate(gate *types.Issue, reason string) {
 	}
 }
 
-func init() {
+func registerGateCmds(root *cobra.Command) {
 	// gate list flags
 	gateListCmd.Flags().BoolP("all", "a", false, "Show all gates including closed")
 	gateListCmd.Flags().IntP("limit", "n", 50, "Limit results (default 50)")
@@ -906,5 +906,5 @@ func init() {
 	gateCmd.AddCommand(gateCheckCmd)
 	gateCmd.AddCommand(gateAddWaiterCmd)
 
-	rootCmd.AddCommand(gateCmd)
+	root.AddCommand(gateCmd)
 }

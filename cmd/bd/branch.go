@@ -73,6 +73,6 @@ Examples:
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(branchCmd)
+func registerBranchCmds(root *cobra.Command) {
+	root.AddCommand(branchCmd)
 }

@@ -202,10 +202,10 @@ func getAssignedStatistics(assignee string) *types.Statistics {
 	return stats
 }
 
-func init() {
+func registerStatusCmds(root *cobra.Command) {
 	statusCmd.Flags().Bool("all", false, "Show all issues (default behavior)")
 	statusCmd.Flags().Bool("assigned", false, "Show issues assigned to current user")
 	statusCmd.Flags().Bool("no-activity", false, "Skip git activity tracking (faster)")
 	// Note: --json flag is defined as a persistent flag in main.go, not here
-	rootCmd.AddCommand(statusCmd)
+	root.AddCommand(statusCmd)
 }

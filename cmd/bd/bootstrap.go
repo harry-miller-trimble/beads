@@ -916,9 +916,9 @@ func findParentConfig(beadsDir string) *configfile.Config {
 	return nil
 }
 
-func init() {
+func registerBootstrapCmds(root *cobra.Command) {
 	bootstrapCmd.Flags().Bool("dry-run", false, "Show what would be done without doing it")
 	bootstrapCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompts (for CI/automation)")
 	bootstrapCmd.Flags().Bool("non-interactive", false, "Alias for --yes")
-	rootCmd.AddCommand(bootstrapCmd)
+	root.AddCommand(bootstrapCmd)
 }

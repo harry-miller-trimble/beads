@@ -909,7 +909,7 @@ func progressBar(current, total int) string {
 	return "[" + bar + "]"
 }
 
-func init() {
+func registerCompactCmds() {
 	compactCmd.Flags().BoolVar(&compactDryRun, "dry-run", false, "Preview without compacting")
 	compactCmd.Flags().IntVar(&compactTier, "tier", 1, "Compaction tier (1 or 2)")
 	compactCmd.Flags().BoolVar(&compactAll, "all", false, "Process all candidates")

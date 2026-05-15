@@ -62,9 +62,9 @@ Example:
 	},
 }
 
-func init() {
+func registerQuickCmds(root *cobra.Command) {
 	quickCmd.Flags().StringP("priority", "p", "2", "Priority (0-4 or P0-P4)")
 	quickCmd.Flags().StringP("type", "t", "task", "Issue type")
 	quickCmd.Flags().StringSliceP("labels", "l", []string{}, "Labels")
-	rootCmd.AddCommand(quickCmd)
+	root.AddCommand(quickCmd)
 }

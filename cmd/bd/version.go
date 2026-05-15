@@ -63,8 +63,8 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(versionCmd)
+func registerVersionCmds(root *cobra.Command) {
+	root.AddCommand(versionCmd)
 }
 
 func resolveCommitHash() string {

@@ -53,7 +53,7 @@ Examples:
 	Run: runGateDiscover,
 }
 
-func init() {
+func registerGateDiscoverCmds() {
 	gateDiscoverCmd.Flags().BoolP("dry-run", "n", false, "Preview mode: show matches without updating")
 	gateDiscoverCmd.Flags().StringP("branch", "b", "", "Filter runs by branch (default: current branch)")
 	gateDiscoverCmd.Flags().IntP("limit", "l", 10, "Max runs to query from GitHub")

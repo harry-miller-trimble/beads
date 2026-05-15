@@ -738,7 +738,7 @@ func fixIntegerFields(m map[string]interface{}) {
 	}
 }
 
-func init() {
+func registerFormulaCmds(root *cobra.Command) {
 	formulaListCmd.Flags().String("type", "", "Filter by type (workflow, expansion, aspect, convoy)")
 	formulaConvertCmd.Flags().BoolVar(&convertAll, "all", false, "Convert all JSON formulas")
 	formulaConvertCmd.Flags().BoolVar(&convertDelete, "delete", false, "Delete JSON file after conversion")
@@ -747,5 +747,5 @@ func init() {
 	formulaCmd.AddCommand(formulaListCmd)
 	formulaCmd.AddCommand(formulaShowCmd)
 	formulaCmd.AddCommand(formulaConvertCmd)
-	rootCmd.AddCommand(formulaCmd)
+	root.AddCommand(formulaCmd)
 }

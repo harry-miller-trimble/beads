@@ -37,6 +37,6 @@ Examples:
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(childrenCmd)
+func registerChildrenCmds(root *cobra.Command) {
+	root.AddCommand(childrenCmd)
 }

@@ -32,7 +32,7 @@ Examples:
 	Run: runReset,
 }
 
-func init() {
+func registerResetCmds() {
 	resetCmd.Flags().Bool("force", false, "Actually perform the reset (required)")
 	// Note: resetCmd is added to adminCmd in admin.go
 }

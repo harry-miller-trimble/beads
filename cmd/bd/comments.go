@@ -188,7 +188,7 @@ Examples:
 	},
 }
 
-func init() {
+func registerCommentsCmds(root *cobra.Command) {
 	commentsCmd.AddCommand(commentsMisplacedListCmd)
 	commentsCmd.AddCommand(commentsAddCmd)
 	commentsCmd.Flags().Bool("local-time", false, "Show timestamps in local time instead of UTC")
@@ -199,7 +199,7 @@ func init() {
 	commentsCmd.ValidArgsFunction = issueIDCompletion
 	commentsAddCmd.ValidArgsFunction = issueIDCompletion
 
-	rootCmd.AddCommand(commentsCmd)
+	root.AddCommand(commentsCmd)
 }
 
 func isUnknownOperationError(err error) bool {

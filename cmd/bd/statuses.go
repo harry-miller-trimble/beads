@@ -109,6 +109,6 @@ type statusInfo struct {
 	Description string `json:"description"`
 }
 
-func init() {
-	rootCmd.AddCommand(statusesCmd)
+func registerStatusesCmds(root *cobra.Command) {
+	root.AddCommand(statusesCmd)
 }

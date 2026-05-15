@@ -299,11 +299,11 @@ func truncateMemory(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func init() {
+func registerMemoryCmds(root *cobra.Command) {
 	rememberCmd.Flags().StringVar(&memoryKeyFlag, "key", "", "Explicit key for the memory (auto-generated from content if not set). If a memory with this key already exists, it will be updated in place")
 
-	rootCmd.AddCommand(rememberCmd)
-	rootCmd.AddCommand(memoriesCmd)
-	rootCmd.AddCommand(forgetCmd)
-	rootCmd.AddCommand(recallCmd)
+	root.AddCommand(rememberCmd)
+	root.AddCommand(memoriesCmd)
+	root.AddCommand(forgetCmd)
+	root.AddCommand(recallCmd)
 }

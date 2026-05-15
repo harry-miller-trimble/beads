@@ -168,7 +168,7 @@ func printContextText(info ContextInfo) {
 	}
 }
 
-func init() {
-	rootCmd.AddCommand(contextCmd)
+func registerContextCmdCmds(root *cobra.Command) {
+	root.AddCommand(contextCmd)
 	readOnlyCommands["context"] = true
 }

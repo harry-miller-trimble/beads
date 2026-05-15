@@ -131,6 +131,6 @@ For agents that don't support hooks (Codex, Factory, etc.), use
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(onboardCmd)
+func registerOnboardCmds(root *cobra.Command) {
+	root.AddCommand(onboardCmd)
 }

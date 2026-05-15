@@ -68,8 +68,8 @@ var codexHookCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(codexHookCmd)
+func registerCodexHookCmds(root *cobra.Command) {
+	root.AddCommand(codexHookCmd)
 }
 
 func runCodexHook(ctx context.Context, event string, stdin io.Reader, stdout io.Writer) error {

@@ -382,7 +382,7 @@ func printCmd(cmd, description string) {
 	fmt.Printf("  %-20s %s\n", ui.RenderCommand(cmd), description)
 }
 
-func init() {
+func registerHumanCmds(root *cobra.Command) {
 	// Add subcommands to humanCmd
 	humanCmd.AddCommand(humanListCmd)
 	humanCmd.AddCommand(humanRespondCmd)
@@ -396,5 +396,5 @@ func init() {
 	humanDismissCmd.Flags().StringP("reason", "", "", "Reason for dismissal (optional)")
 
 	// Register with root command
-	rootCmd.AddCommand(humanCmd)
+	root.AddCommand(humanCmd)
 }

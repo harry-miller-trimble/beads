@@ -108,7 +108,7 @@ var notionSyncCmd = &cobra.Command{
 	RunE: runNotionSync,
 }
 
-func init() {
+func registerNotionCmds(root *cobra.Command) {
 	notionInitCmd.Flags().StringVar(&notionInitParent, "parent", "", "Parent page ID")
 	notionInitCmd.Flags().StringVar(&notionInitTitle, "title", notion.DefaultDatabaseTitle, "Database title")
 	_ = notionInitCmd.MarkFlagRequired("parent")
@@ -131,7 +131,7 @@ func init() {
 		notionStatusCmd,
 		notionSyncCmd,
 	)
-	rootCmd.AddCommand(notionCmd)
+	root.AddCommand(notionCmd)
 }
 
 func getNotionConfig() notionConfig {

@@ -147,10 +147,10 @@ Example:
 	},
 }
 
-func init() {
+func registerDuplicatesCmds(root *cobra.Command) {
 	duplicatesCmd.Flags().Bool("auto-merge", false, "Automatically merge all duplicates")
 	duplicatesCmd.Flags().Bool("dry-run", false, "Show what would be merged without making changes")
-	rootCmd.AddCommand(duplicatesCmd)
+	root.AddCommand(duplicatesCmd)
 }
 
 // contentKey represents the fields we use to identify duplicate issues

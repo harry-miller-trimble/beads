@@ -51,6 +51,6 @@ Examples:
 	},
 }
 
-func init() {
+func registerMolLastActivityCmds() {
 	molCmd.AddCommand(molLastActivityCmd)
 }

@@ -89,6 +89,6 @@ func printMoleculeTree(subgraph *MoleculeSubgraph, parentID string, depth int, i
 	printTemplateTree(subgraph, parentID, depth, isRoot)
 }
 
-func init() {
-	rootCmd.AddCommand(molCmd)
+func registerMolCmds(root *cobra.Command) {
+	root.AddCommand(molCmd)
 }
