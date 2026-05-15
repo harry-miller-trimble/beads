@@ -32,6 +32,7 @@ type Capability string
 const (
 	CapTrackerRead  Capability = "tracker.read"
 	CapTrackerWrite Capability = "tracker.write"
+	CapHookExecute  Capability = "hooks.execute"
 )
 
 // Domain returns the part before the first dot or colon.
